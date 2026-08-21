@@ -48,6 +48,8 @@ workflow 已在 `.github/workflows/analyze.yml` 配置好 5 个 cron：
 |---|---|---|
 | 盘前 | `0 0 * * 1-5` | 08:00 |
 | 竞价结束 | `35 1 * * 1-5` | 09:35 |
+
+依赖安装用 [uv](https://github.com/astral-sh/uv) 而非 pip（Rust 实现，10-100x 加速），并通过 `enable-cache: true` 跨 run 缓存 wheel。
 | 午间 | `35 3 * * 1-5` | 11:35 |
 | 收盘后 | `10 7 * * 1-5` | 15:10 |
 | 盘后深度 | `35 7 * * 1-5` | 15:35 |
