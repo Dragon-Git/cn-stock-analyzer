@@ -145,9 +145,9 @@ class FundFlowSnapshot:
 @dataclass
 class FinancialSnapshot:
     """基本面快照"""
-    industry: str = "N/A"
-    main_business: str = "N/A"
-    list_date: str = "N/A"
+    industry: str = ""
+    main_business: str = ""
+    list_date: str = ""
     total_shares: Optional[float] = None
     circ_shares: Optional[float] = None
     pe_ttm: Optional[float] = None
@@ -164,7 +164,7 @@ class FinancialSnapshot:
     net_profit_yoy: Optional[float] = None
     eps_latest: Optional[float] = None
     div_yield: Optional[float] = None            # 股息率 %
-    report_date: str = "N/A"
+    report_date: str = ""
 
 
 # ===== 核心拉取 =====
@@ -231,6 +231,13 @@ def fetch_history_kline(stock: StockConfig = SHENHUA,
     df = df[cols].copy()
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").reset_index(drop=True)
+    # 新浪源 volume 单位是"股", 转为"手" (1 手 = 100 股)
+    # 简单判断: A 股单笔成交量 < 1e7 一般是手, > 1e7 是股
+    # 新浪 stock_zh_a_daily 的 volume 实际是股数
+    if "volume" in df.columns and len(df) > 0:
+        avg_vol = df["volume"].mean()
+        if avg_vol > 1e7:  # 看上去是股数
+            df["volume"] = df["volume"] / 100.0
     return df
 
 
@@ -337,7 +344,11 @@ def fetch_individual_info(stock: StockConfig = SHENHUA) -> FinancialSnapshot:
         logger.warning("stock_zyjs_ths 失败: %s", e)
 
     # 2) 个股基本信息 - 雪球 (备选)
+<<<<<<< HEAD
     if fs.industry == "N/A":
+=======
+    if not fs.industry:
+>>>>>>> 214374b (fix: 改善报告鲁棒性)
         try:
             df = _retry(ak.stock_individual_basic_info_xq, symbol=stock.sina_symbol)
             if df is not None and not df.empty:

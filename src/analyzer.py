@@ -109,6 +109,18 @@ def run(slot_id: str, out_dir: Path = REPORTS_DIR) -> int:
             kline.loc[kline.index[-1], "low"] = min(
                 float(kline.loc[kline.index[-1], "low"]), snapshot.low
             )
+        # 用实时快照补充 K 线最后一日的 turnover_pct / change_pct / change
+        if snapshot.turnover_pct > 0:
+            kline.loc[kline.index[-1], "turnover_pct"] = snapshot.turnover_pct
+        if snapshot.change_pct != 0:
+            kline.loc[kline.index[-1], "change_pct"] = snapshot.change_pct
+            kline.loc[kline.index[-1], "change"] = snapshot.change
+
+    # 自行计算 K 线中缺的 change_pct / change（新浪源没有）
+    if "change_pct" in kline.columns and kline["change_pct"].isna().any():
+        kline["change_pct"] = kline["close"].pct_change() * 100
+    if "change" in kline.columns and kline["change"].isna().any():
+        kline["change"] = kline["close"].diff()
 
     # 3. 基本面
     fin = df_mod.fetch_individual_info(SHENHUA)

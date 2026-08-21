@@ -199,15 +199,20 @@ def calc_willr(high: pd.Series, low: pd.Series, close: pd.Series,
 
 def calc_cci(high: pd.Series, low: pd.Series, close: pd.Series,
              period: int = 14) -> Dict[str, Optional[float]]:
-    """CCI 顺势指标"""
+    """CCI 顺势指标 (akquant.CCI 构造需要额外 c 参数, 用 pandas 自行计算)"""
     if len(close) < period:
         return {"CCI14": None}
     h, l, c = _arr(high), _arr(low), _arr(close)
     try:
-        ind = akquant.CCI(period=period)
-        for hh, ll, cc in zip(h, l, c):
-            ind.update(float(hh), float(ll), float(cc))
-        return {"CCI14": _scalar(ind.value)}
+        tp = (h + l + c) / 3.0  # typical price
+        sma = pd.Series(tp).rolling(period).mean().to_numpy()
+        md = pd.Series(tp).rolling(period).apply(
+            lambda x: np.mean(np.abs(x - x.mean())), raw=True
+        ).to_numpy()
+        cci = (tp - sma) / (0.015 * md)
+        cci = np.where(np.isinf(cci) | np.isnan(cci), np.nan, cci)
+        val = float(cci[-1]) if not np.isnan(cci[-1]) else None
+        return {"CCI14": val}
     except Exception:  # noqa: BLE001
         return {"CCI14": None}
 

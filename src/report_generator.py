@@ -282,6 +282,10 @@ def _section_kline_overview(kline: pd.DataFrame) -> str:
 
 
 def _section_fundamental(fin: FinancialSnapshot) -> str:
+    # 如果什么都没拉到，就不渲染这一节
+    if (not fin.industry and not fin.main_business and
+            fin.roe is None and fin.revenue_latest is None):
+        return ""
     return "\n".join([
         "## 四、基本面（财务摘要）",
         "",
@@ -333,6 +337,12 @@ def _section_industry(panel: Dict[str, float],
 
 
 def _section_fund_flow(flow: FundFlowSnapshot) -> str:
+    # 全部 None 时跳过
+    if all(v is None for v in (flow.main_net_inflow, flow.super_net_inflow,
+                                 flow.big_net_inflow, flow.mid_net_inflow,
+                                 flow.small_net_inflow, flow.north_net_inflow,
+                                 flow.margin_balance)):
+        return ""
     def colored(v):
         if v is None:
             return "N/A"
@@ -393,9 +403,19 @@ def _section_summary(slot_id: str, snapshot: MarketSnapshot,
         direction = "流入" if main_in > 0 else "流出"
         amount_wan = main_in / 1e4
         lines.append(f"- **主力资金** {direction} {amount_wan:,.0f} 万元")
+    elif flow.main_net_inflow is None and all(
+        v is None for v in (flow.super_net_inflow, flow.big_net_inflow,
+                            flow.north_net_inflow, flow.margin_balance)
+    ):
+        # 资金数据整体缺失，加个提示
+        lines.append("- ℹ️ 资金流数据源 (东方财富) 暂不可用，跳过资金面分析")
 
     if fin.roe is not None:
         lines.append(f"- **ROE** = {fin.roe:.2f}% (报告期 {fin.report_date})")
+    elif fin.industry:
+        lines.append(f"- 行业: {fin.industry}")
+    else:
+        lines.append("- ℹ️ 基本面数据源 (东方财富/同花顺) 暂不可用，跳过基本面分析")
 
     # 时段特定结论
     lines.append("")
@@ -445,19 +465,23 @@ def build_report(slot_id: str,
                  fin: FinancialSnapshot,
                  flow: FundFlowSnapshot,
                  panel: Optional[Dict[str, float]] = None) -> str:
-    """组装完整报告"""
+    """组装完整报告，自动跳过空 section"""
     parts = [
         _header(slot_id, snapshot),
         _section_market(snapshot),
         _section_technical(indicators, snapshot.price),
         _section_kline_overview(kline),
-        _section_fundamental(fin),
     ]
+    fund_text = _section_fundamental(fin)
+    if fund_text:
+        parts.append(fund_text)
     if panel is not None and panel.get("sector_name") != "N/A":
         parts.append(_section_industry(panel, snapshot.change_pct))
-    parts.append(_section_fund_flow(flow))
+    flow_text = _section_fund_flow(flow)
+    if flow_text:
+        parts.append(flow_text)
     parts.append(_section_summary(slot_id, snapshot, indicators, fin, flow))
-    return "\n".join(parts)
+    return "\n".join(p for p in parts if p)
 
 
 def save_report(report_md: str, slot_id: str,
