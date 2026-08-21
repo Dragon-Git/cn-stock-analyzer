@@ -46,16 +46,22 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.12.5"
+          enable-cache: true   # 自动缓存 ~/.cache/uv 跨 run
+          cache-dependency-glob: "requirements.txt"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # uv 比 pip 快 10-100x (Rust 实现), 利用 enable-cache 跨 run 复用 wheel
+          uv pip install --system -r requirements.txt
 
       - name: Cache data fetcher results
         uses: actions/cache@v4
