@@ -344,11 +344,7 @@ def fetch_individual_info(stock: StockConfig = SHENHUA) -> FinancialSnapshot:
         logger.warning("stock_zyjs_ths 失败: %s", e)
 
     # 2) 个股基本信息 - 雪球 (备选)
-<<<<<<< HEAD
-    if fs.industry == "N/A":
-=======
     if not fs.industry:
->>>>>>> 214374b (fix: 改善报告鲁棒性)
         try:
             df = _retry(ak.stock_individual_basic_info_xq, symbol=stock.sina_symbol)
             if df is not None and not df.empty:
