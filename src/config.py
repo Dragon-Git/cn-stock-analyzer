@@ -1,92 +1,128 @@
 """
 神华分析系统 - 配置
-==================
-集中管理股票代码、分析时段、akshare 字段映射等。
+=====================
+股票池和时段的统一配置。
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List
+from dataclasses import dataclass
+from typing import List
 
-
-# ===== 标的配置 =====
 
 @dataclass
 class StockConfig:
     """单只股票的配置"""
-    symbol: str  # 6 位代码, 如 601088
-    name: str    # 中文名
-    market: str  # sh / sz / bj
-    ak_prefix: str  # akshare 用前缀 (sh/sz/bj)
-    sina_symbol: str  # 新浪行情 symbol, 如 sh601088
-    industry: str = ""  # 行业关键词, 用于 cache key
+    symbol: str          # 6 位代码, 如 601088
+    name: str            # 中文名
+    market: str          # sh / sz / bj
+    ak_prefix: str       # akshare 用前缀 (sh/sz/bj)
+    sina_symbol: str     # 新浪行情 symbol, 如 sh601088
+    industry: str = ""   # 行业关键词, 用于 cache key / 行业对比
 
     @property
     def ak_daily_symbol(self) -> str:
         return f"{self.ak_prefix}{self.symbol}"
 
 
-# 中国神华 A 股
-SHENHUA = StockConfig(
-    symbol="601088",
-    name="中国神华",
-    market="sh",
-    ak_prefix="sh",
-    sina_symbol="sh601088",
-    industry="煤炭",
-)
+# A 股监控池 — 蓝筹/白马/科技代表
+# 改这里增加/删除股票
+STOCKS: List[StockConfig] = [
+    StockConfig(
+        symbol="601088",
+        name="中国神华",
+        market="sh",
+        ak_prefix="sh",
+        sina_symbol="sh601088",
+        industry="煤炭",
+    ),
+    StockConfig(
+        symbol="600900",
+        name="长江电力",
+        market="sh",
+        ak_prefix="sh",
+        sina_symbol="sh600900",
+        industry="电力",
+    ),
+    StockConfig(
+        symbol="002371",
+        name="北方华创",
+        market="sz",
+        ak_prefix="sz",
+        sina_symbol="sz002371",
+        industry="半导体",
+    ),
+    StockConfig(
+        symbol="601988",
+        name="中国银行",
+        market="sh",
+        ak_prefix="sh",
+        sina_symbol="sh601988",
+        industry="银行",
+    ),
+    StockConfig(
+        symbol="600026",
+        name="中远海能",
+        market="sh",
+        ak_prefix="sh",
+        sina_symbol="sh600026",
+        industry="航运",
+    ),
+    StockConfig(
+        symbol="600584",
+        name="长电科技",
+        market="sh",
+        ak_prefix="sh",
+        sina_symbol="sh600584",
+        industry="半导体",
+    ),
+]
 
 
-# ===== 时段配置 =====
-# 一天 5 个分析时段（按 A 股交易日）。GitHub Actions cron 在 UTC 触发，
-# 字段是 "分钟 小时 * * 周" 格式。下表时区: UTC，参见 README。
-TIME_SLOTS: List[Dict] = [
+# 兼容旧名字, 部分 import 还在用
+SHENHUA = STOCKS[0]
+
+
+# 5 个时段定义
+TIME_SLOTS = [
     {
-        "id": "pre_market",
+        "id": "pre_market",         # 盘前
         "label": "盘前",
-        "cron_utc": "0 0 * * 1-5",       # UTC 00:00 = 北京 08:00
-        "focus": "隔夜美股、昨日 K 线复盘、关键位预判、竞价预期",
+        "cron_utc": "0 0 * * 1-5",  # 08:00 北京
+        "focus": "全球指数 + 商品 + 公告 + 期指",
     },
     {
-        "id": "post_auction",
-        "label": "竞价结束",
-        "cron_utc": "35 1 * * 1-5",      # UTC 01:35 = 北京 09:35
-        "focus": "集合竞价结果、开盘缺口、量能初判、早盘策略",
+        "id": "post_auction",       # 集合竞价后
+        "label": "竞价后",
+        "cron_utc": "35 1 * * 1-5",  # 09:35 北京
+        "focus": "开盘价 + 集合竞价强度 + 板块异动",
     },
     {
-        "id": "noon",
+        "id": "noon",               # 午间
         "label": "午间",
-        "cron_utc": "35 3 * * 1-5",      # UTC 03:35 = 北京 11:35
-        "focus": "上午 K 线、上午量能、午后预判、KDJ/MACD 状态",
+        "cron_utc": "35 3 * * 1-5",  # 11:35 北京
+        "focus": "上午量价 + 板块轮动 + 北向",
     },
     {
-        "id": "post_close",
-        "label": "收盘后",
-        "cron_utc": "10 7 * * 1-5",      # UTC 07:10 = 北京 15:10
-        "focus": "全天 K 线、MACD/RSI/布林全天态、量价总结",
+        "id": "post_close",         # 收盘后
+        "label": "收盘",
+        "cron_utc": "10 7 * * 1-5",  # 15:10 北京
+        "focus": "全天 K 线 + 技术指标 + 量价总结",
     },
     {
-        "id": "evening",
-        "label": "盘后深度",
-        "cron_utc": "35 7 * * 1-5",      # UTC 07:35 = 北京 15:35
-        "focus": "资金流向、龙虎榜（如有）、估值与基本面综合",
+        "id": "evening",            # 盘后深度
+        "label": "盘后",
+        "cron_utc": "35 7 * * 1-5",  # 15:35 北京
+        "focus": "深度财务 + 资金流 + 明日展望",
     },
 ]
 
 
-def get_slot(slot_id: str) -> Dict:
-    """按 id 获取时段配置"""
+def get_slot(slot_id: str) -> dict:
     for s in TIME_SLOTS:
         if s["id"] == slot_id:
             return s
-    raise KeyError(f"Unknown slot id: {slot_id}")
+    raise ValueError(f"Unknown slot: {slot_id}")
 
 
-# ===== A 股交易时间（仅用于报告中语义描述） =====
-A_SHARE_SESSIONS = [
-    ("集合竞价", "09:15-09:25"),
-    ("连续竞价上午", "09:30-11:30"),
-    ("午间休市", "11:30-13:00"),
-    ("连续竞价下午", "13:00-15:00"),
-    ("盘后固定价格交易", "15:05-15:30"),
-]
+# 报告输出目录
+REPORTS_DIR_NAME = "reports"

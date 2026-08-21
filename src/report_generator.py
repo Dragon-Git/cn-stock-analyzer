@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +17,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from .config import SHENHUA, get_slot
+from .config import STOCKS, StockConfig, get_slot
 from .data_fetcher import (FinancialSnapshot, FundFlowSnapshot,
                             KLineBundle, MarketSnapshot)
 
@@ -133,10 +134,10 @@ def judge_trend(mas: Dict[str, Optional[float]], price: float) -> str:
 
 
 # ===== 报告生成 =====
-def _header(slot_id: str, snapshot: MarketSnapshot) -> str:
+def _header(slot_id: str, snapshot: MarketSnapshot, stock_name: str, stock_symbol: str) -> str:
     slot = get_slot(slot_id)
     lines = [
-        f"# {SHENHUA.name}（{SHENHUA.symbol}）— {slot['label']}分析报告",
+        f"# {stock_name}（{stock_symbol}）— {slot['label']}分析报告",
         "",
         f"> **报告时点**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  ",
         f"> **时段侧重**: {slot['focus']}  ",
@@ -470,10 +471,11 @@ def build_report(slot_id: str,
                  indicators: Dict[str, Dict[str, Optional[float]]],
                  fin: FinancialSnapshot,
                  flow: FundFlowSnapshot,
+                 stock: StockConfig,
                  panel: Optional[Dict[str, float]] = None) -> str:
     """组装完整报告，自动跳过空 section"""
     parts = [
-        _header(slot_id, snapshot),
+        _header(slot_id, snapshot, stock.name, stock.symbol),
         _section_market(snapshot),
         _section_technical(indicators, snapshot.price),
         _section_kline_overview(kline),
@@ -494,23 +496,27 @@ def save_report(report_md: str, slot_id: str,
                 snapshot: MarketSnapshot, kline: pd.DataFrame,
                 indicators: Dict[str, Dict[str, Optional[float]]],
                 fin: FinancialSnapshot, flow: FundFlowSnapshot,
+                stock: StockConfig,
                 out_dir: Path,
                 panel: Optional[Dict[str, float]] = None) -> Dict[str, str]:
     """
-    保存报告和 JSON 数据，返回文件路径 dict。
+    保存报告和 JSON 数据。
+    - 每只股票单独文件 {date}_{slot}_{symbol}_{ts}.md (回溯用)
+    - latest_{slot}.md 单文件包含全部股票, 用 ## 📊 标题分隔
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.now().strftime("%Y%m%d")
     ts = datetime.now().strftime("%H%M%S")
 
-    md_path = out_dir / f"{today}_{slot_id}_{ts}.md"
+    # 单只股票的时间戳文件 (供回溯)
+    md_path = out_dir / f"{today}_{slot_id}_{stock.symbol}_{ts}.md"
     md_path.write_text(report_md, encoding="utf-8")
 
     # 原始数据 JSON
     raw = {
         "slot": slot_id,
         "as_of": datetime.now().isoformat(timespec="seconds"),
-        "stock": {"symbol": SHENHUA.symbol, "name": SHENHUA.name},
+        "stock": {"symbol": stock.symbol, "name": stock.name},
         "snapshot": asdict(snapshot),
         "kline": (kline.tail(60).assign(date=kline["date"].dt.strftime("%Y-%m-%d"))
                   ).to_dict(orient="records") if kline is not None and not kline.empty else [],
@@ -519,7 +525,7 @@ def save_report(report_md: str, slot_id: str,
         "fund_flow": asdict(flow),
         "industry_panel": panel or {},
     }
-    # numpy 转 python 原生
+
     def _default(o):
         if hasattr(o, "item"):
             try:
@@ -527,12 +533,61 @@ def save_report(report_md: str, slot_id: str,
             except Exception:
                 pass
         return str(o)
-    json_path = out_dir / f"{today}_{slot_id}_{ts}.json"
+
+    json_path = out_dir / f"{today}_{slot_id}_{stock.symbol}_{ts}.json"
     json_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2, default=_default),
                          encoding="utf-8")
 
-    # 最新报告覆盖 (供 README 引用)
+    # 单文件: latest_{slot}.md 包含所有股票
+    # 结构:
+    #   # 多股票 {slot} 时段报告          (总标题, 仅在新建时)
+    #   > 报告时点 / 股票池              (总 metadata, 仅在新建时)
+    #   ## 📊 {name}（{symbol}）         (每只股票的 wrapper)
+    #   ### {原 H1 标题}                  (原 H1 降级为 H3, 因为 wrapper 占了 H2)
+    #   ## 一、行情快照                   (原 H2 不变, 因为 H2 没被占)
+    #   ...
     latest_md = out_dir / f"latest_{slot_id}.md"
-    latest_md.write_text(report_md, encoding="utf-8")
+    section_title = f"## 📊 {stock.name}（{stock.symbol}）"
+    # 把原报告的 H1 升级为 H3 (因为 ## 已经被 ## 📊 占)
+    # H2 不动 (一、二、三、)
+    body = report_md
+    body = re.sub(r"^# (.+)$", rf"### \1", body, count=1, flags=re.MULTILINE)
+    stock_section = f"{section_title}\n\n{body}"
+
+    if latest_md.exists():
+        existing = latest_md.read_text(encoding="utf-8")
+        # 旧格式 (无 ## 📊 marker, 是单只股票 H1 报告) → 删掉重建为多股票格式
+        if "## 📊" not in existing:
+            logger.info("[%s] latest_%s.md 是旧单股票格式, 重建为多股票格式",
+                        stock.symbol, slot_id)
+            existing = ""
+        if not existing:
+            # 多股票 header (首次创建)
+            header = (
+                f"# 多股票 {slot_id} 时段报告\n\n"
+                f"> **报告时点**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  \n"
+                f"> **股票池**: {' / '.join(f'{s.name}({s.symbol})' for s in STOCKS)}  \n\n"
+                "---\n\n"
+            )
+            latest_md.write_text(header + stock_section, encoding="utf-8")
+        elif section_title in existing:
+            # 替换该股票段落 (idempotent)
+            pattern = re.compile(
+                rf"## 📊 {re.escape(stock.name)}（{re.escape(stock.symbol)}）.*?"
+                rf"(?=\n## 📊 |\Z)",
+                re.DOTALL,
+            )
+            existing = pattern.sub("", existing).rstrip() + "\n\n"
+            latest_md.write_text(existing + stock_section, encoding="utf-8")
+        else:
+            latest_md.write_text(existing.rstrip() + "\n\n---\n\n" + stock_section, encoding="utf-8")
+    else:
+        header = (
+            f"# 多股票 {slot_id} 时段报告\n\n"
+            f"> **报告时点**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  \n"
+            f"> **股票池**: {' / '.join(f'{s.name}({s.symbol})' for s in STOCKS)}  \n\n"
+            "---\n\n"
+        )
+        latest_md.write_text(header + stock_section, encoding="utf-8")
 
     return {"md": str(md_path), "json": str(json_path), "latest": str(latest_md)}

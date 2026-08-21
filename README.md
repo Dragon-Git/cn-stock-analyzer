@@ -1,6 +1,6 @@
-# 中国神华 (601088) 智能分析系统
+# A 股多股票智能分析系统
 
-> 基于 [AKQuant](https://github.com/akfamily/akquant) + [AKShare](https://github.com/akfamily/akshare) 的 A 股量化分析系统，每日 5 个时段自动对中国神华（601088）进行**基本面 + 技术面 + 资金面**全维度分析并产出 Markdown 报告。
+> 基于 [AKQuant](https://github.com/akfamily/akquant) + [AKShare](https://github.com/akfamily/akshare) 的 A 股量化分析系统，每日 5 个时段对监控池中的 **6 只蓝筹/白马/科技股** 自动进行**基本面 + 技术面 + 资金面**全维度分析，**合并产出**一份 Markdown 报告。
 
 ---
 
@@ -19,6 +19,8 @@
 - **基本面**：滚动 PE/PB/PS、ROE、毛利率、净利率、营收/净利同比、资产负债率
 - **资金面**：主力/超大单/大单/中单/小单净流入、北向资金（估算）、融资余额
 - 报告自动 commit 到 `reports/`，可通过 README 入口跳转
+- **6 只股票合并一份报告**：`reports/latest_{slot}.md` 用 `## 📊 {name}` 分隔
+- **监控池**：中国神华 / 长江电力 / 北方华创 / 中国银行 / 中远海能 / 长电科技
 
 ---
 

@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # - 用户可显式通过 SHENHUA_CACHE_DB 环境变量覆盖
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = Path(
-    os.environ.get("SHENHUA_CACHE_DB", str(_PROJECT_ROOT / "data_cache.sqlite"))
+    os.environ.get("CN_STOCK_CACHE_DB", str(_PROJECT_ROOT / "data_cache.sqlite"))
 )
 
 
