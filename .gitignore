@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Reports (commit only latest, keep history via commits)
+reports/*.json
+reports/*.csv
+!reports/.gitkeep
+*.log
+.DS_Store

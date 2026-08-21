@@ -1,0 +1,5 @@
+akquant>=0.3.40
+akshare>=1.16.0
+pandas>=2.0
+numpy>=1.24
+requests>=2.31

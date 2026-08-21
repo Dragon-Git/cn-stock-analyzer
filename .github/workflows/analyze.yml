@@ -1,0 +1,101 @@
+name: Shenhua Analysis
+
+on:
+  # 5 个时段，周一到周五（A股交易日近似处理：法定节假日用 cron 也会触发，由脚本内日期判断或运行结果决定）
+  schedule:
+    # 盘前 (北京时间 08:00 = UTC 00:00)
+    - cron: "0 0 * * 1-5"
+    # 竞价结束 (北京时间 09:35 = UTC 01:35)
+    - cron: "35 1 * * 1-5"
+    # 午间 (北京时间 11:35 = UTC 03:35)
+    - cron: "35 3 * * 1-5"
+    # 收盘后 (北京时间 15:10 = UTC 07:10)
+    - cron: "10 7 * * 1-5"
+    # 盘后深度 (北京时间 15:35 = UTC 07:35)
+    - cron: "35 7 * * 1-5"
+  # 支持手动触发，可选时段
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "分析时段"
+        required: true
+        type: choice
+        options:
+          - pre_market
+          - post_auction
+          - noon
+          - post_close
+          - evening
+          - all
+        default: post_close
+
+concurrency:
+  group: shenhua-analyze
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write  # 提交报告到仓库
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run analysis
+        env:
+          PYTHONUNBUFFERED: "1"
+          TZ: Asia/Shanghai
+        run: |
+          SLOT="${{ github.event.inputs.slot || 'post_close' }}"
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # 自动 cron 触发时，根据 UTC 时间推算当前时段
+            HOUR=$(date -u +%H)
+            MIN=$(date -u +%M)
+            HM=$(printf "%02d%02d" $HOUR $MIN)
+            if   [ "$HM" -ge "0000" ] && [ "$HM" -lt "0135" ]; then SLOT="pre_market"
+            elif [ "$HM" -ge "0135" ] && [ "$HM" -lt "0335" ]; then SLOT="post_auction"
+            elif [ "$HM" -ge "0335" ] && [ "$HM" -lt "0710" ]; then SLOT="noon"
+            elif [ "$HM" -ge "0710" ] && [ "$HM" -lt "0735" ]; then SLOT="post_close"
+            else SLOT="evening"
+            fi
+          fi
+          echo "分析时段: $SLOT"
+          python -m src.analyzer --slot "$SLOT"
+
+      - name: Show latest report
+        if: always()
+        run: |
+          ls -la reports/
+          for f in reports/latest_*.md; do
+            [ -f "$f" ] && echo "===== $f =====" && head -80 "$f" && echo
+          done
+
+      - name: Commit reports
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/ || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            SLOT="${{ github.event.inputs.slot || 'auto' }}"
+            git commit -m "chore(reports): update ${SLOT} report $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push
+          fi
