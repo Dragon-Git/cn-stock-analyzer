@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,25 @@ from .data_fetcher import (FinancialSnapshot, FundFlowSnapshot,
                             KLineBundle, MarketSnapshot)
 
 logger = logging.getLogger(__name__)
+
+
+# Per-slot lock for the shared `latest_{slot}.md` file.
+# 6 stocks all call save_report() in parallel; without this, the
+# read-modify-write inside the function lets one thread's write overwrite
+# another's. We hold the lock only across the latest-md section, since
+# per-stock files (md/json with timestamp) are independent.
+_LATEST_LOCKS: Dict[str, threading.Lock] = {}
+_LATEST_LOCKS_GUARD = threading.Lock()
+
+
+def _get_latest_lock(slot_id: str) -> threading.Lock:
+    """Return a process-wide lock unique to this slot id."""
+    with _LATEST_LOCKS_GUARD:
+        lock = _LATEST_LOCKS.get(slot_id)
+        if lock is None:
+            lock = threading.Lock()
+            _LATEST_LOCKS[slot_id] = lock
+        return lock
 
 
 # ===== 格式化辅助 =====
@@ -324,7 +344,8 @@ def _section_fundamental(fin: FinancialSnapshot) -> str:
 
 
 def _section_industry(panel: Dict[str, float],
-                       stock_change: float) -> str:
+                       stock_change: float,
+                       stock_name: str = "个股") -> str:
     sec = panel.get("sector_change_pct", 0.0)
     idx = panel.get("sh_index_change_pct", 0.0)
     rel_sec = stock_change - sec
@@ -334,8 +355,8 @@ def _section_industry(panel: Dict[str, float],
         "",
         f"| 维度 | 涨跌幅 | 相对个股 |",
         "|---|---|---|",
-        f"| {SHENHUA.name}（个股） | {_pct(stock_change)} | — |",
-        f"| {panel.get('sector_name', '煤炭板块')} | {_pct(sec)} | "
+        f"| {stock_name}（个股） | {_pct(stock_change)} | — |",
+        f"| {panel.get('sector_name', '所属板块')} | {_pct(sec)} | "
         f"{'强于板块' if rel_sec > 0 else '弱于板块'} {_pct(rel_sec)} |",
         f"| 上证指数 | {_pct(idx)} | "
         f"{'强于大盘' if rel_idx > 0 else '弱于大盘'} {_pct(rel_idx)} |",
@@ -484,7 +505,7 @@ def build_report(slot_id: str,
     if fund_text:
         parts.append(fund_text)
     if panel is not None and panel.get("sector_name") != "N/A":
-        parts.append(_section_industry(panel, snapshot.change_pct))
+        parts.append(_section_industry(panel, snapshot.change_pct, stock.name))
     flow_text = _section_fund_flow(flow)
     if flow_text:
         parts.append(flow_text)
@@ -546,6 +567,21 @@ def save_report(report_md: str, slot_id: str,
     #   ### {原 H1 标题}                  (原 H1 降级为 H3, 因为 wrapper 占了 H2)
     #   ## 一、行情快照                   (原 H2 不变, 因为 H2 没被占)
     #   ...
+    # 6 stocks call this in parallel; serialize the read-modify-write of
+    # the shared file via a per-slot lock to avoid lost sections.
+    _write_latest_md(out_dir, slot_id, stock, report_md)
+
+    return {"md": str(md_path), "json": str(json_path), "latest": str(out_dir / f"latest_{slot_id}.md")}
+
+
+def _write_latest_md(out_dir: Path, slot_id: str,
+                     stock: StockConfig, report_md: str) -> None:
+    """
+    Append/replace one stock's section in the shared `latest_{slot}.md`.
+
+    Serialized via a per-slot lock so the read-modify-write of the file is
+    atomic across parallel stock analyses.
+    """
     latest_md = out_dir / f"latest_{slot_id}.md"
     section_title = f"## 📊 {stock.name}（{stock.symbol}）"
     # 把原报告的 H1 升级为 H3 (因为 ## 已经被 ## 📊 占)
@@ -554,15 +590,47 @@ def save_report(report_md: str, slot_id: str,
     body = re.sub(r"^# (.+)$", rf"### \1", body, count=1, flags=re.MULTILINE)
     stock_section = f"{section_title}\n\n{body}"
 
-    if latest_md.exists():
-        existing = latest_md.read_text(encoding="utf-8")
-        # 旧格式 (无 ## 📊 marker, 是单只股票 H1 报告) → 删掉重建为多股票格式
-        if "## 📊" not in existing:
-            logger.info("[%s] latest_%s.md 是旧单股票格式, 重建为多股票格式",
-                        stock.symbol, slot_id)
-            existing = ""
-        if not existing:
-            # 多股票 header (首次创建)
+    with _get_latest_lock(slot_id):
+        if latest_md.exists():
+            existing = latest_md.read_text(encoding="utf-8")
+            # 旧格式 (无 ## 📊 marker, 是单只股票 H1 报告) → 删掉重建为多股票格式
+            if "## 📊" not in existing:
+                logger.info("[%s] latest_%s.md 是旧单股票格式, 重建为多股票格式",
+                            stock.symbol, slot_id)
+                existing = ""
+            if not existing:
+                # 多股票 header (首次创建)
+                header = (
+                    f"# 多股票 {slot_id} 时段报告\n\n"
+                    f"> **报告时点**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  \n"
+                    f"> **股票池**: {' / '.join(f'{s.name}({s.symbol})' for s in STOCKS)}  \n\n"
+                    "---\n\n"
+                )
+                latest_md.write_text(header + stock_section, encoding="utf-8")
+            elif section_title in existing:
+                # 替换该股票段落 (idempotent, e.g. 同一天内重跑)
+                pattern = re.compile(
+                    rf"## 📊 {re.escape(stock.name)}（{re.escape(stock.symbol)}）.*?"
+                    rf"(?=\n## 📊 |\Z)",
+                    re.DOTALL,
+                )
+                new_content = pattern.sub("", existing).rstrip()
+                # pattern may leave a trailing "\n\n" before the next ## 📊; clean it
+                new_content = re.sub(r"\n{3,}", "\n\n", new_content).rstrip()
+                latest_md.write_text(new_content + "\n\n" + stock_section,
+                                     encoding="utf-8")
+            else:
+                # 在已有内容末尾追加新股票段落
+                existing = existing.rstrip()
+                # Avoid stacking multiple "---" separators if a previous run
+                # left the file ending with one
+                if not existing.endswith("---"):
+                    latest_md.write_text(existing + "\n\n---\n\n" + stock_section,
+                                         encoding="utf-8")
+                else:
+                    latest_md.write_text(existing + "\n\n" + stock_section,
+                                         encoding="utf-8")
+        else:
             header = (
                 f"# 多股票 {slot_id} 时段报告\n\n"
                 f"> **报告时点**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  \n"
@@ -570,24 +638,3 @@ def save_report(report_md: str, slot_id: str,
                 "---\n\n"
             )
             latest_md.write_text(header + stock_section, encoding="utf-8")
-        elif section_title in existing:
-            # 替换该股票段落 (idempotent)
-            pattern = re.compile(
-                rf"## 📊 {re.escape(stock.name)}（{re.escape(stock.symbol)}）.*?"
-                rf"(?=\n## 📊 |\Z)",
-                re.DOTALL,
-            )
-            existing = pattern.sub("", existing).rstrip() + "\n\n"
-            latest_md.write_text(existing + stock_section, encoding="utf-8")
-        else:
-            latest_md.write_text(existing.rstrip() + "\n\n---\n\n" + stock_section, encoding="utf-8")
-    else:
-        header = (
-            f"# 多股票 {slot_id} 时段报告\n\n"
-            f"> **报告时点**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  \n"
-            f"> **股票池**: {' / '.join(f'{s.name}({s.symbol})' for s in STOCKS)}  \n\n"
-            "---\n\n"
-        )
-        latest_md.write_text(header + stock_section, encoding="utf-8")
-
-    return {"md": str(md_path), "json": str(json_path), "latest": str(latest_md)}
