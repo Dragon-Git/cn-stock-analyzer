@@ -50,6 +50,19 @@ workflow 已在 `.github/workflows/analyze.yml` 配置好 5 个 cron：
 | 竞价结束 | `35 1 * * 1-5` | 09:35 |
 
 依赖安装用 [uv](https://github.com/astral-sh/uv) 而非 pip（Rust 实现，10-100x 加速），并通过 `enable-cache: true` 跨 run 缓存 wheel。
+
+### 性能数据（典型 run）
+
+| 阶段 | 耗时 |
+|---|---|
+| Runner 启动 + checkout | ~10s |
+| uv 装依赖（命中 cache）| ~1s |
+| akshare/akquant 启动 | ~1s |
+| 拉数据（cache 全命中 + 腾讯直连实时）| ~2s |
+| 报告生成 + commit | ~10s |
+| **总耗时** | **~24s** |
+
+腾讯直连作为首选数据源（单 symbol 而非全市场 5000+ 股票），避开了 akshare `stock_zh_a_spot_em` 在 GH Action 上 ~90s 的全市场拉取。
 | 午间 | `35 3 * * 1-5` | 11:35 |
 | 收盘后 | `10 7 * * 1-5` | 15:10 |
 | 盘后深度 | `35 7 * * 1-5` | 15:35 |
