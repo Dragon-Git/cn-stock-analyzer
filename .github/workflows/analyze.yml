@@ -41,22 +41,22 @@ jobs:
       contents: write  # 提交报告到仓库
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v10
         with:
           version: "0.12.5"
           enable-cache: true   # 自动缓存 ~/.cache/uv 跨 run
           cache-dependency-glob: "requirements.txt"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.13"   # 3.13 LTS, 平衡稳定性和性能 (3.14 太新生态未稳)
 
       - name: Install dependencies
         run: |
@@ -64,7 +64,7 @@ jobs:
           uv pip install --system -r requirements.txt
 
       - name: Cache data fetcher results
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: data_cache.sqlite
           # 同一分支下所有 run 共享 cache (数据库文件, 后面会覆盖前面)
@@ -124,8 +124,7 @@ jobs:
 
       - name: Save data cache for next run
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: data_cache.sqlite
           key: shenhua-data-cache-${{ github.ref_name }}
-

@@ -1,5 +1,12 @@
-akquant>=0.3.40
-akshare>=1.16.0
-pandas>=2.0
-numpy>=1.24
-requests>=2.31
+# 核心依赖
+# 钉版策略: 主版本钉住 (避免 break), 次要/补丁留 range 让 Dependabot 提 PR
+akquant>=0.3.40,<1.0
+akshare>=1.16.0,<2.0
+
+# 数据
+pandas>=2.2,<4        # 3.0 引入了 CoW 默认, 测试通过
+numpy>=2.0,<3         # 2.x 大版本
+
+# HTTP
+requests>=2.31,<3
+curl_cffi>=0.13,<1

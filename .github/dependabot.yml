@@ -1,0 +1,64 @@
+# Dependabot 配置 - 自动 PR 升级依赖和 GitHub Actions
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+
+version: 2
+
+# === Python (pip) 依赖 ===
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Asia/Shanghai"
+    # PR 标题加 emoji 前缀便于识别
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: "scope"
+    # 一次最多 5 个 PR, 避免刷屏
+    open-pull-requests-limit: 5
+    # 给 PR 加 reviewer 标签
+    labels:
+      - "dependencies"
+      - "python"
+    # 主要版本 (2.x -> 3.x) 单独 PR, 不自动合
+    # minor + patch 自动合 (Dependabot auto-merge 在 settings 配置)
+    groups:
+      pandas:
+        patterns:
+          - "pandas"
+          - "numpy"
+      http:
+        patterns:
+          - "requests"
+          - "curl_cffi"
+          - "urllib3"
+      akshare:
+        patterns:
+          - "akshare"
+          - "akquant"
+
+# === GitHub Actions ===
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Asia/Shanghai"
+    commit-message:
+      prefix: "ci"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      actions-core:
+        patterns:
+          - "actions/*"
+      third-party:
+        patterns:
+          - "astral-sh/*"
+          - "github/*"
