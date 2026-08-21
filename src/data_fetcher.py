@@ -7,14 +7,16 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import akshare as ak
 import pandas as pd
+import requests
 
 from .config import SHENHUA, StockConfig
 
@@ -22,8 +24,8 @@ logger = logging.getLogger(__name__)
 
 
 # ===== 工具 =====
-def _retry(fn, *args, retries: int = 2, sleep: float = 1.0, **kwargs):
-    """简单重试包装"""
+def _retry(fn, *args, retries: int = 1, sleep: float = 0.5, **kwargs):
+    """简单重试包装（默认 1 次重试，避免长时间阻塞 Action）"""
     last_err: Optional[Exception] = None
     for i in range(retries + 1):
         try:
@@ -51,6 +53,52 @@ def _safe_str(x: Any, default: str = "N/A") -> str:
         return default
     s = str(x).strip()
     return s if s else default
+
+
+# ===== 腾讯直连 =====
+def _tencent_quote(symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    直连腾讯财经 API 拉取单只股票实时行情，作为最稳兜底。
+    https://qt.gtimg.cn/q=sh601088
+    返回 v_sh601088="1~中国神华~601088~46.55~46.90~46.34~4606998~..."
+    """
+    if not symbol.startswith(("sh", "sz", "bj")):
+        symbol = f"sh{symbol}"
+    url = f"https://qt.gtimg.cn/q={symbol}"
+    try:
+        r = requests.get(url, timeout=8,
+                        headers={"User-Agent": "Mozilla/5.0"})
+        text = r.text.strip()
+        if "=" not in text or '""' in text:
+            return None
+        # 提取 v_sh601088="..." 中的内容
+        val = text.split('="', 1)[1].rstrip('";')
+        parts = val.split("~")
+        if len(parts) < 40:
+            return None
+        # 字段顺序参考 https://stock.gtimg.cn/data/index.php
+        # 0: 未知 1: 名称 2: 代码 3: 当前价 4: 昨收 5: 今开 6: 成交量(手)
+        # 30: 时间戳 31: 涨跌额 32: 涨跌幅(%) 33: 最高 34: 最低
+        # 38: 换手率(%) 39: PE 44: 流通市值(亿) 45: 总市值(亿) 41/42: 涨停/跌停价
+        return {
+            "name": parts[1],
+            "symbol": parts[2],
+            "price": float(parts[3]) if parts[3] else None,
+            "pre_close": float(parts[4]) if parts[4] else None,
+            "open": float(parts[5]) if parts[5] else None,
+            "volume_hand": int(float(parts[6])) if parts[6] else 0,  # 手
+            "high": float(parts[33]) if len(parts) > 33 and parts[33] else None,
+            "low": float(parts[34]) if len(parts) > 34 and parts[34] else None,
+            "change_pct": float(parts[32]) if len(parts) > 32 and parts[32] else None,
+            "change": float(parts[31]) if len(parts) > 31 and parts[31] else None,
+            "turnover_pct": float(parts[38]) if len(parts) > 38 and parts[38] else None,
+            "pe": float(parts[39]) if len(parts) > 39 and parts[39] else None,
+            "circ_mv_yi": float(parts[44]) if len(parts) > 44 and parts[44] else None,
+            "total_mv_yi": float(parts[45]) if len(parts) > 45 and parts[45] else None,
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.warning("腾讯直连 %s 失败: %s", symbol, e)
+        return None
 
 
 # ===== 数据类 =====
@@ -188,28 +236,47 @@ def fetch_history_kline(stock: StockConfig = SHENHUA,
 
 def fetch_realtime_snapshot(stock: StockConfig = SHENHUA) -> MarketSnapshot:
     """
-    拉取实时行情快照。多源 fallback：东财 → 雪球/腾讯/新浪
+    拉取实时行情快照。多源 fallback：新浪 → 东方财富 → 腾讯直连
     """
     snap = MarketSnapshot()
     snap.as_of = datetime.now().isoformat(timespec="seconds")
-    # 1) 东方财富
+    # 1) 新浪 (首选) - stock_zh_a_spot 全市场
     try:
-        df = _retry(ak.stock_zh_a_spot_em)
-        if df is not None and not df.empty:
-            row = df[df["代码"] == stock.symbol]
-            if not row.empty:
-                return _parse_em_spot(snap, row.iloc[0])
-    except Exception as e:  # noqa: BLE001
-        logger.warning("东财 spot 失败: %s", e)
-    # 2) 新浪分笔 fallback
-    try:
-        df = _retry(ak.stock_zh_a_spot)
+        df = _retry(ak.stock_zh_a_spot, retries=1, sleep=0.5)
         if df is not None and not df.empty:
             row = df[df["代码"] == stock.symbol]
             if not row.empty:
                 return _parse_sina_spot(snap, row.iloc[0])
     except Exception as e:  # noqa: BLE001
         logger.warning("新浪 spot 失败: %s", e)
+    # 2) 东方财富 (备选)
+    try:
+        df = _retry(ak.stock_zh_a_spot_em, retries=1, sleep=0.5)
+        if df is not None and not df.empty:
+            row = df[df["代码"] == stock.symbol]
+            if not row.empty:
+                return _parse_em_spot(snap, row.iloc[0])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("东财 spot 失败: %s", e)
+    # 3) 腾讯直连 (最稳的最后兜底)
+    try:
+        q = _tencent_quote(stock.sina_symbol)
+        if q and q.get("price") is not None:
+            snap.price = q["price"]
+            snap.open = q.get("open") or 0.0
+            snap.high = q.get("high") or 0.0
+            snap.low = q.get("low") or 0.0
+            snap.pre_close = q.get("pre_close") or 0.0
+            snap.change = q.get("change") or 0.0
+            snap.change_pct = q.get("change_pct") or 0.0
+            snap.volume = float(q.get("volume_hand") or 0)
+            snap.turnover_pct = q.get("turnover_pct") or 0.0
+            snap.pe = q.get("pe")
+            snap.total_mv = q.get("total_mv_yi")  # 腾讯直接给亿
+            snap.circ_mv = q.get("circ_mv_yi")
+            logger.info("腾讯直连获取 %s 行情成功", stock.sina_symbol)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("腾讯直连 失败: %s", e)
     return snap
 
 
@@ -253,50 +320,93 @@ def _parse_sina_spot(snap: MarketSnapshot, r) -> MarketSnapshot:
 
 
 def fetch_individual_info(stock: StockConfig = SHENHUA) -> FinancialSnapshot:
-    """拉取个股基本信息 + 估值/财务摘要"""
+    """拉取个股基本信息 + 估值/财务摘要（多源 fallback）"""
     fs = FinancialSnapshot()
+    # 1) 个股基本信息 - 同花顺
     try:
-        df = _retry(ak.stock_individual_info_em, symbol=stock.symbol)
+        df = _retry(ak.stock_zyjs_ths, symbol=stock.symbol)
         if df is not None and not df.empty:
-            kv = dict(zip(df["item"], df["value"]))
-            fs.industry = _safe_str(kv.get("行业"), "N/A")
-            fs.main_business = _safe_str(kv.get("主营业务"), "N/A")
-            fs.list_date = _safe_str(kv.get("上市时间"), "N/A")
-            fs.total_shares = _safe_float(kv.get("总股本"))
-            fs.circ_shares = _safe_float(kv.get("流通股本"))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("stock_individual_info_em 失败: %s", e)
-
-    # 财务摘要 - 东方财富
-    try:
-        df = _retry(ak.stock_financial_abstract, symbol=stock.symbol)
-        if df is not None and not df.empty:
-            # 列: 指标, 2025-06-30, 2024-12-31, ...
-            rmap = {
-                "基本每股收益": "eps_latest",
-                "每股净资产": "_skip",
-                "加权净资产收益率": "roe",
-                "毛利率": "gross_margin",
-                "净利率": "net_margin",
-                "资产负债率": "debt_ratio",
-                "营业总收入": "revenue_latest",
-                "营业总收入同比": "revenue_yoy",
-                "归属母公司净利润": "net_profit_latest",
-                "归属母公司净利润同比": "net_profit_yoy",
-            }
+            # df 列: 主营业务, ...
             for _, row in df.iterrows():
-                key = _safe_str(row.iloc[0])
-                if key in rmap and rmap[key] != "_skip":
-                    val = _safe_float(row.iloc[1])
-                    if val is not None:
-                        setattr(fs, rmap[key], val)
-            # 报告期 = 第一列
-            if len(df.columns) > 1:
-                fs.report_date = _safe_str(df.columns[1])
+                k, v = str(row.iloc[0]), str(row.iloc[1]) if len(row) > 1 else ""
+                if "主营" in k or "业务" in k:
+                    fs.main_business = v[:200]
+                elif "行业" in k:
+                    fs.industry = v
     except Exception as e:  # noqa: BLE001
-        logger.warning("stock_financial_abstract 失败: %s", e)
+        logger.warning("stock_zyjs_ths 失败: %s", e)
+
+    # 2) 个股基本信息 - 雪球 (备选)
+    if fs.industry == "N/A":
+        try:
+            df = _retry(ak.stock_individual_basic_info_xq, symbol=stock.sina_symbol)
+            if df is not None and not df.empty:
+                kv = dict(zip(df["item"], df["value"]))
+                fs.industry = _safe_str(kv.get("所属行业"), fs.industry)
+                fs.list_date = _safe_str(kv.get("上市日期"), fs.list_date)
+                fs.total_shares = _safe_float(kv.get("总股本"), fs.total_shares)
+                fs.circ_shares = _safe_float(kv.get("流通股本"), fs.circ_shares)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("stock_individual_basic_info_xq 失败: %s", e)
+
+    # 3) 财务摘要 - 雪球
+    if hasattr(ak, "stock_financial_report_sina"):
+        try:
+            df = _retry(ak.stock_financial_report_sina, stock=stock.symbol)
+            if df is not None and not df.empty:
+                # 新浪财务: 字段包括 报告日期, 每股收益, 每股净资产, ROE, ...
+                rmap = {
+                    "每股收益": "eps_latest",
+                    "净资产收益率": "roe",
+                    "毛利率": "gross_margin",
+                    "净利率": "net_margin",
+                    "资产负债率": "debt_ratio",
+                    "营业总收入": "revenue_latest",
+                    "营业收入": "revenue_latest",
+                    "净利润": "net_profit_latest",
+                    "归属母公司净利润": "net_profit_latest",
+                }
+                for col in df.columns:
+                    val = df.iloc[0][col] if len(df) > 0 else None
+                    if col in rmap:
+                        v = _safe_float(val)
+                        if v is not None and getattr(fs, rmap[col], None) is None:
+                            setattr(fs, rmap[col], v)
+                # 报告期
+                if "报告日期" in df.columns:
+                    fs.report_date = _safe_str(df.iloc[0]["报告日期"])
+        except Exception as e:  # noqa: BLE001
+            logger.warning("stock_financial_report_sina 失败: %s", e)
 
     return fs
+
+
+def _tencent_index(symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    腾讯指数直连。symbol 形如 sh000001 (上证) / sz399001 (深成)。
+    """
+    if not symbol.startswith(("sh", "sz")):
+        symbol = f"sh{symbol}"
+    url = f"https://qt.gtimg.cn/q={symbol}"
+    try:
+        r = requests.get(url, timeout=8,
+                        headers={"User-Agent": "Mozilla/5.0"})
+        text = r.text.strip()
+        if "=" not in text or '""' in text:
+            return None
+        val = text.split('="', 1)[1].rstrip('";')
+        parts = val.split("~")
+        if len(parts) < 40:
+            return None
+        return {
+            "name": parts[1],
+            "price": float(parts[3]) if parts[3] else None,
+            "change_pct": float(parts[32]) if len(parts) > 32 and parts[32] else None,
+            "change": float(parts[31]) if len(parts) > 31 and parts[31] else None,
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.warning("腾讯指数 %s 失败: %s", symbol, e)
+        return None
 
 
 def fetch_industry_panel(stock: StockConfig = SHENHUA) -> Dict[str, float]:
@@ -308,34 +418,42 @@ def fetch_industry_panel(stock: StockConfig = SHENHUA) -> Dict[str, float]:
         "sector_change_pct": 0.0,
         "sh_index_change_pct": 0.0,
     }
-    # 1) 东财板块
+    # 1) 煤炭板块 - 申万煤炭指数 sh000820
     try:
-        df = _retry(ak.stock_board_industry_name_em)
-        if df is not None and not df.empty:
-            mask = df["板块名称"].astype(str).str.contains("煤炭", na=False)
-            if mask.any():
-                row = df[mask].iloc[0]
-                out["sector_name"] = str(row.get("板块名称", "N/A"))
-                out["sector_change_pct"] = _safe_float(row.get("涨跌幅"), 0.0) or 0.0
+        q = _tencent_index("sh000820")
+        if q and q.get("change_pct") is not None:
+            out["sector_name"] = q.get("name", "煤炭指数")
+            out["sector_change_pct"] = q["change_pct"]
     except Exception as e:  # noqa: BLE001
-        logger.warning("板块 (东财) 失败: %s", e)
-
-    # 2) 上证指数 (新浪源)
-    try:
-        df = _retry(ak.stock_zh_index_spot_em, symbol="上证指数")
-        if df is not None and not df.empty:
-            out["sh_index_change_pct"] = _safe_float(df.iloc[0].get("涨跌幅"), 0.0) or 0.0
-        else:
-            # fallback: stock_zh_index_daily 取最新一日
-            df = _retry(ak.stock_zh_index_daily, symbol="sh000001")
+        logger.warning("腾讯煤炭板块 失败: %s", e)
+    # 2) 东财板块 fallback
+    if out["sector_change_pct"] == 0.0:
+        try:
+            df = _retry(ak.stock_board_industry_name_em, retries=1, sleep=0.5)
             if df is not None and not df.empty:
-                last2 = df.tail(2)
-                if len(last2) == 2:
-                    p0 = float(last2.iloc[0]["close"])
-                    p1 = float(last2.iloc[1]["close"])
-                    out["sh_index_change_pct"] = round((p1 / p0 - 1) * 100, 2)
+                mask = df["板块名称"].astype(str).str.contains("煤炭", na=False)
+                if mask.any():
+                    row = df[mask].iloc[0]
+                    out["sector_name"] = str(row.get("板块名称", "煤炭开采"))
+                    out["sector_change_pct"] = _safe_float(row.get("涨跌幅"), 0.0) or 0.0
+        except Exception as e:  # noqa: BLE001
+            logger.warning("板块 (东财) 失败: %s", e)
+
+    # 3) 上证指数 - 腾讯首选
+    try:
+        q = _tencent_index("sh000001")
+        if q and q.get("change_pct") is not None:
+            out["sh_index_change_pct"] = q["change_pct"]
     except Exception as e:  # noqa: BLE001
-        logger.warning("上证指数 失败: %s", e)
+        logger.warning("腾讯上证 失败: %s", e)
+    # 4) 上证指数 fallback
+    if out["sh_index_change_pct"] == 0.0:
+        try:
+            df = _retry(ak.stock_zh_index_spot_em, symbol="上证指数", retries=1, sleep=0.5)
+            if df is not None and not df.empty:
+                out["sh_index_change_pct"] = _safe_float(df.iloc[0].get("涨跌幅"), 0.0) or 0.0
+        except Exception as e:  # noqa: BLE001
+            logger.warning("东财上证 失败: %s", e)
     return out
 
 
