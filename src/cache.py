@@ -22,9 +22,13 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# 默认 cache 路径: 仓库根目录下的 data_cache.sqlite
+# 默认 cache 路径: 项目根目录下的 data_cache.sqlite
+# - 本地: /var/minis/workspace/shenhua-analyzer/data_cache.sqlite
+# - GitHub Action: $GITHUB_WORKSPACE/data_cache.sqlite (即 $REPO_ROOT)
+# - 用户可显式通过 SHENHUA_CACHE_DB 环境变量覆盖
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = Path(
-    os.environ.get("SHENHUA_CACHE_DB", "/var/minis/workspace/shenhua-analyzer/data_cache.sqlite")
+    os.environ.get("SHENHUA_CACHE_DB", str(_PROJECT_ROOT / "data_cache.sqlite"))
 )
 
 
