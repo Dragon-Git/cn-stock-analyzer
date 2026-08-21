@@ -121,6 +121,9 @@ def run(slot_id: str, out_dir: Path = REPORTS_DIR) -> int:
         kline["change_pct"] = kline["close"].pct_change() * 100
     if "change" in kline.columns and kline["change"].isna().any():
         kline["change"] = kline["close"].diff()
+    # 换手率只在实时数据有, 历史行用 "-" 占位
+    if "turnover_pct" not in kline.columns:
+        kline["turnover_pct"] = None
 
     # 3. 基本面
     fin = df_mod.fetch_individual_info(SHENHUA)

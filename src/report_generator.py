@@ -272,10 +272,13 @@ def _section_kline_overview(kline: pd.DataFrame) -> str:
     ]
     for _, r in last.iterrows():
         d = r["date"].strftime("%Y-%m-%d")
+        vol = f"{r['volume']:,.0f}" if pd.notna(r.get("volume")) else "—"
+        tp = r.get("turnover_pct")
+        tp_s = f"{tp:.2f}" if tp is not None and pd.notna(tp) else "—"
         lines.append(
             f"| {d} | {r['open']:.2f} | {r['high']:.2f} | {r['low']:.2f} | "
-            f"{r['close']:.2f} | {r['volume']:,.0f} | "
-            f"{_pct(r.get('change_pct'))} | {r.get('turnover_pct', 0):.2f} |"
+            f"{r['close']:.2f} | {vol} | "
+            f"{_pct(r.get('change_pct'))} | {tp_s} |"
         )
     lines.append("")
     return "\n".join(lines)
