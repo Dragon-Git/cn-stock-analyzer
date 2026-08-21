@@ -123,8 +123,9 @@ class FinancialSnapshot:
 def fetch_history_kline(stock: StockConfig = SHENHUA,
                         days: int = 400) -> pd.DataFrame:
     """
-    拉取历史日 K 线（含近 1 年数据，足够算 MA60/布林/RSI 等）
-    使用 akshare 的东方财富接口，比新浪更全。
+    拉取历史日 K 线。多源 fallback：
+      1) 新浪 (ak.stock_zh_a_daily, qfq 前复权) — 最稳
+      2) 东方财富 (ak.stock_zh_a_hist) — 数据最全但易被封
     """
     end = datetime.now()
     start = end - timedelta(days=days)
@@ -132,18 +133,43 @@ def fetch_history_kline(stock: StockConfig = SHENHUA,
     end_str = end.strftime("%Y%m%d")
 
     logger.info("拉取 %s K 线 %s -> %s", stock.name, start_str, end_str)
-    df = _retry(
-        ak.stock_zh_a_hist,
-        symbol=stock.symbol,
-        period="daily",
-        start_date=start_str,
-        end_date=end_str,
-        adjust="qfq",  # 前复权
-    )
+
+    df = pd.DataFrame()
+
+    # 1) 新浪: stock_zh_a_daily(symbol="sh601088", qfq=True)
+    try:
+        df = _retry(
+            ak.stock_zh_a_daily,
+            symbol=stock.sina_symbol,
+            start_date=start_str,
+            end_date=end_str,
+            adjust="qfq",
+        )
+        if df is not None and not df.empty:
+            logger.info("新浪源获取 K 线 %d 条", len(df))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("新浪源失败: %s", e)
+
+    # 2) 东方财富 fallback
+    if df is None or df.empty:
+        try:
+            df = _retry(
+                ak.stock_zh_a_hist,
+                symbol=stock.symbol,
+                period="daily",
+                start_date=start_str,
+                end_date=end_str,
+                adjust="qfq",
+            )
+            if df is not None and not df.empty:
+                logger.info("东方财富源获取 K 线 %d 条", len(df))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("东方财富源失败: %s", e)
+
     if df is None or df.empty:
         return pd.DataFrame()
 
-    # 统一列名
+    # 统一列名（两个源的列名略有差异）
     rename = {
         "日期": "date", "开盘": "open", "最高": "high", "最低": "low",
         "收盘": "close", "成交量": "volume", "成交额": "amount",
@@ -162,23 +188,32 @@ def fetch_history_kline(stock: StockConfig = SHENHUA,
 
 def fetch_realtime_snapshot(stock: StockConfig = SHENHUA) -> MarketSnapshot:
     """
-    拉取实时行情快照 (东方财富接口，全市场一次拉，本地过滤)
+    拉取实时行情快照。多源 fallback：东财 → 雪球/腾讯/新浪
     """
     snap = MarketSnapshot()
     snap.as_of = datetime.now().isoformat(timespec="seconds")
+    # 1) 东方财富
     try:
         df = _retry(ak.stock_zh_a_spot_em)
+        if df is not None and not df.empty:
+            row = df[df["代码"] == stock.symbol]
+            if not row.empty:
+                return _parse_em_spot(snap, row.iloc[0])
     except Exception as e:  # noqa: BLE001
-        logger.error("拉取实时行情失败: %s", e)
-        return snap
-    if df is None or df.empty:
-        return snap
+        logger.warning("东财 spot 失败: %s", e)
+    # 2) 新浪分笔 fallback
+    try:
+        df = _retry(ak.stock_zh_a_spot)
+        if df is not None and not df.empty:
+            row = df[df["代码"] == stock.symbol]
+            if not row.empty:
+                return _parse_sina_spot(snap, row.iloc[0])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("新浪 spot 失败: %s", e)
+    return snap
 
-    row = df[df["代码"] == stock.symbol]
-    if row.empty:
-        logger.warning("实时行情里没找到 %s", stock.symbol)
-        return snap
-    r = row.iloc[0]
+
+def _parse_em_spot(snap: MarketSnapshot, r) -> MarketSnapshot:
     snap.price = _safe_float(r.get("最新价"), 0.0) or 0.0
     snap.open = _safe_float(r.get("今日开盘价"), 0.0) or 0.0
     snap.high = _safe_float(r.get("最高价"), 0.0) or 0.0
@@ -191,12 +226,29 @@ def fetch_realtime_snapshot(stock: StockConfig = SHENHUA) -> MarketSnapshot:
     snap.turnover_pct = _safe_float(r.get("换手率"), 0.0) or 0.0
     snap.pe = _safe_float(r.get("市盈率-动态"))
     snap.pb = _safe_float(r.get("市净率"))
-    snap.total_mv = _safe_float(r.get("总市值"))   # 单位: 元
-    snap.circ_mv = _safe_float(r.get("流通市值"))  # 单位: 元
+    snap.total_mv = _safe_float(r.get("总市值"))
+    snap.circ_mv = _safe_float(r.get("流通市值"))
     if snap.total_mv is not None:
-        snap.total_mv = snap.total_mv / 1e8  # 转亿
+        snap.total_mv /= 1e8
     if snap.circ_mv is not None:
-        snap.circ_mv = snap.circ_mv / 1e8
+        snap.circ_mv /= 1e8
+    return snap
+
+
+def _parse_sina_spot(snap: MarketSnapshot, r) -> MarketSnapshot:
+    """新浪源字段名跟东财不一样，做个映射"""
+    # 新浪 stock_zh_a_spot 的列：代码, 名称, 最新价, 涨跌额, 涨跌幅, 买入, 卖出,
+    # 昨收, 今开, 最高, 最低, 成交量, 成交额, ...
+    snap.price = _safe_float(r.get("最新价"), 0.0) or 0.0
+    snap.open = _safe_float(r.get("今开"), 0.0) or 0.0
+    snap.high = _safe_float(r.get("最高"), 0.0) or 0.0
+    snap.low = _safe_float(r.get("最低"), 0.0) or 0.0
+    snap.pre_close = _safe_float(r.get("昨收"), 0.0) or 0.0
+    snap.change = _safe_float(r.get("涨跌额"), 0.0) or 0.0
+    snap.change_pct = _safe_float(r.get("涨跌幅"), 0.0) or 0.0
+    snap.volume = _safe_float(r.get("成交量"), 0.0) or 0.0
+    snap.amount = _safe_float(r.get("成交额"), 0.0) or 0.0
+    # 新浪没换手率/PE/PB，留空
     return snap
 
 
@@ -249,58 +301,73 @@ def fetch_individual_info(stock: StockConfig = SHENHUA) -> FinancialSnapshot:
 
 def fetch_industry_panel(stock: StockConfig = SHENHUA) -> Dict[str, float]:
     """
-    拉取煤炭板块当日表现，与个股做对比。
-    返回: {"sector_name": str, "sector_change_pct": float, "sh_index_change_pct": float}
+    拉取煤炭板块当日表现，与个股做对比。多源 fallback。
     """
     out: Dict[str, float] = {
         "sector_name": "N/A",
         "sector_change_pct": 0.0,
         "sh_index_change_pct": 0.0,
     }
+    # 1) 东财板块
     try:
         df = _retry(ak.stock_board_industry_name_em)
         if df is not None and not df.empty:
-            # 找煤炭
             mask = df["板块名称"].astype(str).str.contains("煤炭", na=False)
             if mask.any():
                 row = df[mask].iloc[0]
                 out["sector_name"] = str(row.get("板块名称", "N/A"))
                 out["sector_change_pct"] = _safe_float(row.get("涨跌幅"), 0.0) or 0.0
     except Exception as e:  # noqa: BLE001
-        logger.warning("stock_board_industry_name_em 失败: %s", e)
+        logger.warning("板块 (东财) 失败: %s", e)
+
+    # 2) 上证指数 (新浪源)
     try:
         df = _retry(ak.stock_zh_index_spot_em, symbol="上证指数")
         if df is not None and not df.empty:
             out["sh_index_change_pct"] = _safe_float(df.iloc[0].get("涨跌幅"), 0.0) or 0.0
+        else:
+            # fallback: stock_zh_index_daily 取最新一日
+            df = _retry(ak.stock_zh_index_daily, symbol="sh000001")
+            if df is not None and not df.empty:
+                last2 = df.tail(2)
+                if len(last2) == 2:
+                    p0 = float(last2.iloc[0]["close"])
+                    p1 = float(last2.iloc[1]["close"])
+                    out["sh_index_change_pct"] = round((p1 / p0 - 1) * 100, 2)
     except Exception as e:  # noqa: BLE001
-        logger.warning("stock_zh_index_spot_em 失败: %s", e)
+        logger.warning("上证指数 失败: %s", e)
     return out
 
 
 def fetch_fund_flow(stock: StockConfig = SHENHUA) -> FundFlowSnapshot:
-    """拉取当日主力资金流 + 北向 + 融资余额"""
+    """拉取当日主力资金流 + 北向 + 融资余额。多源 fallback。"""
     fs = FundFlowSnapshot()
     fs.as_of = datetime.now().isoformat(timespec="seconds")
-    fs.as_of = datetime.now().isoformat(timespec="seconds")
-    # 主力资金流 (个股)
-    try:
-        df = _retry(ak.stock_individual_fund_flow, stock=stock.symbol,
-                    market=stock.market)
-        if df is not None and not df.empty:
-            r = df.iloc[0]
-            fs.main_net_inflow = _safe_float(r.get("主力净流入-净额"))
-            fs.super_net_inflow = _safe_float(r.get("超大单净流入-净额"))
-            fs.big_net_inflow = _safe_float(r.get("大单净流入-净额"))
-            fs.mid_net_inflow = _safe_float(r.get("中单净流入-净额"))
-            fs.small_net_inflow = _safe_float(r.get("小单净流入-净额"))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("stock_individual_fund_flow 失败: %s", e)
+    # 主力资金流 (个股) - 多源
+    flow_fns = [
+        lambda: ak.stock_individual_fund_flow(stock=stock.symbol, market=stock.market),
+    ]
+    if hasattr(ak, "stock_individual_fund_flow_xq"):
+        flow_fns.append(lambda: ak.stock_individual_fund_flow_xq(symbol=stock.sina_symbol))
+    for fn in flow_fns:
+        try:
+            df = _retry(fn)
+            if df is not None and not df.empty:
+                r = df.iloc[0]
+                fs.main_net_inflow = _safe_float(r.get("主力净流入-净额"))
+                fs.super_net_inflow = _safe_float(r.get("超大单净流入-净额"))
+                fs.big_net_inflow = _safe_float(r.get("大单净流入-净额"))
+                fs.mid_net_inflow = _safe_float(r.get("中单净流入-净额"))
+                fs.small_net_inflow = _safe_float(r.get("小单净流入-净额"))
+                if fs.main_net_inflow is not None:
+                    break
+        except Exception as e:  # noqa: BLE001
+            logger.warning("fund_flow source failed: %s", e)
 
-    # 北向资金持股 - 取最新一日的"今日持股变化"作为净流入代理
+    # 北向资金持股
     try:
         df = _retry(ak.stock_hsgt_individual_em, symbol=stock.sina_symbol)
         if df is not None and not df.empty:
-            # df 列: 持股日期, 当日收盘价, 持股数量, 持股市值, 持股变化 ...
             r = df.iloc[0]
             chg = _safe_float(r.get("持股变化"))
             price = _safe_float(r.get("当日收盘价"))
@@ -311,8 +378,9 @@ def fetch_fund_flow(stock: StockConfig = SHENHUA) -> FundFlowSnapshot:
 
     # 融资融券
     try:
-        df = _retry(ak.stock_margin_underlying_info_szse if stock.market == "sz"
-                    else ak.stock_margin_underlying_info_sse, symbol=stock.symbol)
+        df_fn = (ak.stock_margin_underlying_info_szse if stock.market == "sz"
+                 else ak.stock_margin_underlying_info_sse)
+        df = _retry(df_fn, symbol=stock.symbol)
         if df is not None and not df.empty:
             r = df.iloc[0]
             fs.margin_balance = _safe_float(r.get("融资余额"))
