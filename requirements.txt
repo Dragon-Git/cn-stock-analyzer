@@ -9,4 +9,4 @@ numpy>=2.5.2,<3         # 2.x 大版本
 
 # HTTP
 requests>=2.34.2,<3
-curl_cffi>=0.13,<1
+curl_cffi>=0.16.0,<1
