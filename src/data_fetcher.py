@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # ===== 工具 =====
-def _retry(fn, *args, retries: int = 1, sleep: float = 0.5, **kwargs):
+def _retry(fn, *args, retries: int = 1, sleep: float = 0.1, **kwargs):
     """简单重试包装（默认 1 次重试，避免长时间阻塞 Action）"""
     last_err: Optional[Exception] = None
     for i in range(retries + 1):
@@ -268,29 +268,12 @@ def fetch_history_kline(stock: StockConfig = SHENHUA,
 
 def fetch_realtime_snapshot(stock: StockConfig = SHENHUA) -> MarketSnapshot:
     """
-    拉取实时行情快照。多源 fallback：新浪 → 东方财富 → 腾讯直连
+    拉取实时行情快照。多源 fallback：**腾讯直连优先** (单 symbol 直连, 0.2s) →
+    新浪 → 东方财富 (都拉全市场 5000+ 股票, 30s+)。
     """
     snap = MarketSnapshot()
     snap.as_of = datetime.now().isoformat(timespec="seconds")
-    # 1) 新浪 (首选) - stock_zh_a_spot 全市场
-    try:
-        df = _retry(ak.stock_zh_a_spot, retries=1, sleep=0.5)
-        if df is not None and not df.empty:
-            row = df[df["代码"] == stock.symbol]
-            if not row.empty:
-                return _parse_sina_spot(snap, row.iloc[0])
-    except Exception as e:  # noqa: BLE001
-        logger.warning("新浪 spot 失败: %s", e)
-    # 2) 东方财富 (备选)
-    try:
-        df = _retry(ak.stock_zh_a_spot_em, retries=1, sleep=0.5)
-        if df is not None and not df.empty:
-            row = df[df["代码"] == stock.symbol]
-            if not row.empty:
-                return _parse_em_spot(snap, row.iloc[0])
-    except Exception as e:  # noqa: BLE001
-        logger.warning("东财 spot 失败: %s", e)
-    # 3) 腾讯直连 (最稳的最后兜底)
+    # 0) 腾讯直连 (首选) - 单 symbol, 0.2s, 最稳
     try:
         q = _tencent_quote(stock.sina_symbol)
         if q and q.get("price") is not None:
@@ -306,9 +289,28 @@ def fetch_realtime_snapshot(stock: StockConfig = SHENHUA) -> MarketSnapshot:
             snap.pe = q.get("pe")
             snap.total_mv = q.get("total_mv_yi")  # 腾讯直接给亿
             snap.circ_mv = q.get("circ_mv_yi")
-            logger.info("腾讯直连获取 %s 行情成功", stock.sina_symbol)
+            logger.info("腾讯直连获取 %s 行情成功 (优先路径)", stock.sina_symbol)
+            return snap
     except Exception as e:  # noqa: BLE001
         logger.warning("腾讯直连 失败: %s", e)
+    # 1) 新浪 (备选) - stock_zh_a_spot 全市场, 慢
+    try:
+        df = _retry(ak.stock_zh_a_spot, retries=1, sleep=0.3)
+        if df is not None and not df.empty:
+            row = df[df["代码"] == stock.symbol]
+            if not row.empty:
+                return _parse_sina_spot(snap, row.iloc[0])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("新浪 spot 失败: %s", e)
+    # 2) 东方财富 (最后兜底)
+    try:
+        df = _retry(ak.stock_zh_a_spot_em, retries=1, sleep=0.3)
+        if df is not None and not df.empty:
+            row = df[df["代码"] == stock.symbol]
+            if not row.empty:
+                return _parse_em_spot(snap, row.iloc[0])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("东财 spot 失败: %s", e)
     return snap
 
 
@@ -477,7 +479,7 @@ def fetch_industry_panel(stock: StockConfig = SHENHUA) -> Dict[str, float]:
     # 2) 东财板块 fallback
     if out["sector_change_pct"] == 0.0:
         try:
-            df = _retry(ak.stock_board_industry_name_em, retries=1, sleep=0.5)
+            df = _retry(ak.stock_board_industry_name_em, retries=1, sleep=0.1)
             if df is not None and not df.empty:
                 mask = df["板块名称"].astype(str).str.contains("煤炭", na=False)
                 if mask.any():
@@ -497,7 +499,7 @@ def fetch_industry_panel(stock: StockConfig = SHENHUA) -> Dict[str, float]:
     # 4) 上证指数 fallback
     if out["sh_index_change_pct"] == 0.0:
         try:
-            df = _retry(ak.stock_zh_index_spot_em, symbol="上证指数", retries=1, sleep=0.5)
+            df = _retry(ak.stock_zh_index_spot_em, symbol="上证指数", retries=1, sleep=0.1)
             if df is not None and not df.empty:
                 out["sh_index_change_pct"] = _safe_float(df.iloc[0].get("涨跌幅"), 0.0) or 0.0
         except Exception as e:  # noqa: BLE001

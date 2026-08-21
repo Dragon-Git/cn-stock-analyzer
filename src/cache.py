@@ -111,6 +111,7 @@ TTL_INDUSTRY_INDEX = 30 * 60           # 板块指数: 30 分钟
 TTL_INDIVIDUAL_INFO = 7 * 24 * 3600    # 个股基本信息: 1 周
 TTL_FINANCIAL = 7 * 24 * 3600          # 财务数据: 1 周
 TTL_FUND_FLOW = 6 * 3600               # 资金流: 6 小时 (收盘后基本不变)
+TTL_TRADING_CALENDAR = 7 * 24 * 3600    # 交易日历: 1 周 (一年才变)
 
 
 def kline_key(symbol: str, days: int, adjust: str) -> str:

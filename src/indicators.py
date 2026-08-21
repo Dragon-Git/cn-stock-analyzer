@@ -17,9 +17,22 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional
 
-import akquant
+# 延迟 import: akquant 0.3.x 加载较慢 (~500ms 包含 backtest 子模块)
+# 在 compute_all() 中按需导入并设置为模块全局
 import numpy as np
 import pandas as pd
+
+# 占位, compute_all() 第一次调用时会替换
+akquant = None  # type: ignore
+
+
+def _ensure_akquant():
+    """第一次使用时导入 akquant, 并注入到模块全局"""
+    global akquant
+    if akquant is not None:
+        return
+    import akquant as _ak
+    akquant = _ak
 
 logger = logging.getLogger(__name__)
 
@@ -351,6 +364,7 @@ def compute_all(kline: pd.DataFrame) -> Dict[str, Dict[str, Optional[float]]]:
     一次性计算所有指标，返回嵌套 dict。
     失败/数据不足的指标值为 None，不抛异常。
     """
+    _ensure_akquant()  # 首次调用时延迟 import akquant (~500ms)
     if kline is None or kline.empty:
         return {}
 

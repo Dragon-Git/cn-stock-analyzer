@@ -125,14 +125,16 @@ def run(slot_id: str, out_dir: Path = REPORTS_DIR) -> int:
     if "turnover_pct" not in kline.columns:
         kline["turnover_pct"] = None
 
-    # 3. 基本面
-    fin = df_mod.fetch_individual_info(SHENHUA)
-
-    # 4. 资金流
-    flow = df_mod.fetch_fund_flow(SHENHUA)
-
-    # 4.5 行业对比
-    panel = df_mod.fetch_industry_panel(SHENHUA)
+    # 3-4.5. 并行拉基本面 + 资金流 + 行业 (三者互不依赖, I/O bound 用 ThreadPool)
+    logger.info("并行拉取 基本面/资金流/行业 3 个数据源...")
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_fin = ex.submit(df_mod.fetch_individual_info, SHENHUA)
+        f_flow = ex.submit(df_mod.fetch_fund_flow, SHENHUA)
+        f_panel = ex.submit(df_mod.fetch_industry_panel, SHENHUA)
+        fin = f_fin.result()
+        flow = f_flow.result()
+        panel = f_panel.result()
 
     # 5. 技术指标
     logger.info("计算技术指标 (akquant)...")
