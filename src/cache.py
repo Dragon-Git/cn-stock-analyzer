@@ -105,6 +105,7 @@ def cleanup_expired() -> int:
 # ===== 业务级 helper =====
 
 # 缓存 key 命名规范: "<type>:<symbol>:<tag>"
+# v2: 修复 volume 单位 bug 后, 旧 key 已无意义, 改 key 让旧条目自然过期
 # TTL 秒数
 TTL_HISTORY_KLINE = 6 * 3600           # 历史 K 线: 6 小时 (一天抓几次就够)
 TTL_INDUSTRY_INDEX = 30 * 60           # 板块指数: 30 分钟
@@ -115,7 +116,7 @@ TTL_TRADING_CALENDAR = 7 * 24 * 3600    # 交易日历: 1 周 (一年才变)
 
 
 def kline_key(symbol: str, days: int, adjust: str) -> str:
-    return f"kline:{symbol}:{days}:{adjust}"
+    return f"kline:v2:{symbol}:{days}:{adjust}"
 
 
 def industry_key(sector_name: str) -> str:

@@ -195,6 +195,7 @@ def fetch_history_kline(stock: StockConfig = SHENHUA,
     logger.info("拉取 %s K 线 %s -> %s", stock.name, start_str, end_str)
 
     df = pd.DataFrame()
+    source: Optional[str] = None  # 数据源标识, 决定 volume 单位是否需要转换
 
     # 1) 新浪: stock_zh_a_daily(symbol="sh601088", qfq=True)
     try:
@@ -206,6 +207,7 @@ def fetch_history_kline(stock: StockConfig = SHENHUA,
             adjust="qfq",
         )
         if df is not None and not df.empty:
+            source = "sina"
             logger.info("新浪源获取 K 线 %d 条", len(df))
     except Exception as e:  # noqa: BLE001
         logger.warning("新浪源失败: %s", e)
@@ -222,6 +224,7 @@ def fetch_history_kline(stock: StockConfig = SHENHUA,
                 adjust="qfq",
             )
             if df is not None and not df.empty:
+                source = "em"
                 logger.info("东方财富源获取 K 线 %d 条", len(df))
         except Exception as e:  # noqa: BLE001
             logger.warning("东方财富源失败: %s", e)
@@ -243,13 +246,13 @@ def fetch_history_kline(stock: StockConfig = SHENHUA,
     df = df[cols].copy()
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").reset_index(drop=True)
-    # 新浪源 volume 单位是"股", 转为"手" (1 手 = 100 股)
-    # 简单判断: A 股单笔成交量 < 1e7 一般是手, > 1e7 是股
-    # 新浪 stock_zh_a_daily 的 volume 实际是股数
-    if "volume" in df.columns and len(df) > 0:
-        avg_vol = df["volume"].mean()
-        if avg_vol > 1e7:  # 看上去是股数
-            df["volume"] = df["volume"] / 100.0
+    # volume 单位:
+    #   - 新浪 (ak.stock_zh_a_daily) 返回的是"股", 需 /100 转为"手"
+    #   - 东财 (ak.stock_zh_a_hist) 返回的是"手", 不动
+    # 之前用 avg_vol > 1e7 启发式判断源, 对中小盘 (北方华创/长电科技/中远海能)
+    # 给出错误单位, 已被替换为 source 显式判断。
+    if "volume" in df.columns and source == "sina":
+        df["volume"] = df["volume"] / 100.0
     # === cache write ===
     try:
         # 转 dict 时把 Timestamp/date 序列化为 ISO 字符串
