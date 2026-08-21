@@ -116,12 +116,12 @@ def run(slot_id: str, out_dir: Path = REPORTS_DIR) -> int:
             kline.loc[kline.index[-1], "change_pct"] = snapshot.change_pct
             kline.loc[kline.index[-1], "change"] = snapshot.change
 
-    # 自行计算 K 线中缺的 change_pct / change（新浪源没有）
-    if "change_pct" in kline.columns and kline["change_pct"].isna().any():
+    # 自行计算 K 线中缺的 change_pct / change（新浪源没有这两列）
+    if "change_pct" not in kline.columns or kline["change_pct"].isna().all():
         kline["change_pct"] = kline["close"].pct_change() * 100
-    if "change" in kline.columns and kline["change"].isna().any():
+    if "change" not in kline.columns or kline["change"].isna().all():
         kline["change"] = kline["close"].diff()
-    # 换手率只在实时数据有, 历史行用 "-" 占位
+    # 换手率只在实时数据有, 历史行用 None 占位
     if "turnover_pct" not in kline.columns:
         kline["turnover_pct"] = None
 

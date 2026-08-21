@@ -12,3 +12,9 @@ reports/*.csv
 !reports/.gitkeep
 *.log
 .DS_Store
+
+# Local runtime artifacts
+data_cache.sqlite
+*.sqlite
+*.sqlite-journal
+.cache/

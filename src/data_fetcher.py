@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +19,7 @@ import pandas as pd
 import requests
 
 from .config import SHENHUA, StockConfig
+from . import cache
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +175,18 @@ def fetch_history_kline(stock: StockConfig = SHENHUA,
     拉取历史日 K 线。多源 fallback：
       1) 新浪 (ak.stock_zh_a_daily, qfq 前复权) — 最稳
       2) 东方财富 (ak.stock_zh_a_hist) — 数据最全但易被封
+    结果缓存 6 小时，避免每个时段重复拉。
     """
+    # === cache check ===
+    cache_key = cache.kline_key(stock.symbol, days, "qfq")
+    cached = cache.get(cache_key)
+    if cached is not None:
+        logger.info("K 线命中缓存 (%d 条, key=%s)", len(cached), cache_key)
+        df_cached = pd.DataFrame(cached)
+        if "date" in df_cached.columns:
+            df_cached["date"] = pd.to_datetime(df_cached["date"])
+        return df_cached
+
     end = datetime.now()
     start = end - timedelta(days=days)
     start_str = start.strftime("%Y%m%d")
@@ -238,6 +250,19 @@ def fetch_history_kline(stock: StockConfig = SHENHUA,
         avg_vol = df["volume"].mean()
         if avg_vol > 1e7:  # 看上去是股数
             df["volume"] = df["volume"] / 100.0
+    # === cache write ===
+    try:
+        # 转 dict 时把 Timestamp/date 序列化为 ISO 字符串
+        df_for_cache = df.copy()
+        if "date" in df_for_cache.columns and pd.api.types.is_datetime64_any_dtype(
+            df_for_cache["date"]
+        ):
+            df_for_cache["date"] = df_for_cache["date"].dt.strftime("%Y-%m-%d")
+        records = df_for_cache.to_dict(orient="records")
+        cache.set_(cache_key, records, cache.TTL_HISTORY_KLINE)
+        logger.info("K 线已缓存 (%d 条, TTL=%ds)", len(records), cache.TTL_HISTORY_KLINE)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("K 线缓存失败: %s", e)
     return df
 
 
@@ -327,7 +352,12 @@ def _parse_sina_spot(snap: MarketSnapshot, r) -> MarketSnapshot:
 
 
 def fetch_individual_info(stock: StockConfig = SHENHUA) -> FinancialSnapshot:
-    """拉取个股基本信息 + 估值/财务摘要（多源 fallback）"""
+    """拉取个股基本信息 + 估值/财务摘要（多源 fallback）。缓存 1 周。"""
+    cache_key = cache.info_key(stock.symbol)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        logger.info("个股基本面命中缓存: %s", cache_key)
+        return FinancialSnapshot(**cached)
     fs = FinancialSnapshot()
     # 1) 个股基本信息 - 同花顺
     try:
@@ -385,6 +415,11 @@ def fetch_individual_info(stock: StockConfig = SHENHUA) -> FinancialSnapshot:
         except Exception as e:  # noqa: BLE001
             logger.warning("stock_financial_report_sina 失败: %s", e)
 
+    # === cache write ===
+    try:
+        cache.set_(cache_key, asdict(fs), cache.TTL_INDIVIDUAL_INFO)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("基本面缓存失败: %s", e)
     return fs
 
 
@@ -419,7 +454,13 @@ def _tencent_index(symbol: str) -> Optional[Dict[str, Any]]:
 def fetch_industry_panel(stock: StockConfig = SHENHUA) -> Dict[str, float]:
     """
     拉取煤炭板块当日表现，与个股做对比。多源 fallback。
+    缓存 30 分钟（板块涨跌变化较快，但 5 个时段内不必每次都拉）。
     """
+    cache_key = cache.industry_key(stock.industry or "default")
+    cached = cache.get(cache_key)
+    if cached is not None:
+        logger.info("行业板块命中缓存: %s", cached)
+        return cached
     out: Dict[str, float] = {
         "sector_name": "N/A",
         "sector_change_pct": 0.0,
@@ -461,11 +502,22 @@ def fetch_industry_panel(stock: StockConfig = SHENHUA) -> Dict[str, float]:
                 out["sh_index_change_pct"] = _safe_float(df.iloc[0].get("涨跌幅"), 0.0) or 0.0
         except Exception as e:  # noqa: BLE001
             logger.warning("东财上证 失败: %s", e)
+    # === cache write ===
+    try:
+        cache.set_(cache_key, out, cache.TTL_INDUSTRY_INDEX)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("行业缓存失败: %s", e)
     return out
 
 
 def fetch_fund_flow(stock: StockConfig = SHENHUA) -> FundFlowSnapshot:
-    """拉取当日主力资金流 + 北向 + 融资余额。多源 fallback。"""
+    """拉取当日主力资金流 + 北向 + 融资余额。多源 fallback。缓存 6 小时。"""
+    cache_key = cache.fund_flow_key(stock.symbol)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        logger.info("资金流命中缓存: %s", cache_key)
+        fs = FundFlowSnapshot(**cached)
+        return fs
     fs = FundFlowSnapshot()
     fs.as_of = datetime.now().isoformat(timespec="seconds")
     # 主力资金流 (个股) - 多源
@@ -512,4 +564,9 @@ def fetch_fund_flow(stock: StockConfig = SHENHUA) -> FundFlowSnapshot:
     except Exception as e:  # noqa: BLE001
         logger.warning("融资融券 失败: %s", e)
 
+    # === cache write ===
+    try:
+        cache.set_(cache_key, asdict(fs), cache.TTL_FUND_FLOW)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("资金流缓存失败: %s", e)
     return fs

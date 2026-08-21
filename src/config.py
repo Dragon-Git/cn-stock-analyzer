@@ -19,6 +19,7 @@ class StockConfig:
     market: str  # sh / sz / bj
     ak_prefix: str  # akshare 用前缀 (sh/sz/bj)
     sina_symbol: str  # 新浪行情 symbol, 如 sh601088
+    industry: str = ""  # 行业关键词, 用于 cache key
 
     @property
     def ak_daily_symbol(self) -> str:
@@ -32,6 +33,7 @@ SHENHUA = StockConfig(
     market="sh",
     ak_prefix="sh",
     sina_symbol="sh601088",
+    industry="煤炭",
 )
 
 

@@ -65,11 +65,13 @@ workflow 已在 `.github/workflows/analyze.yml` 配置好 5 个 cron：
 ├── .github/workflows/analyze.yml   # GitHub Actions
 ├── src/
 │   ├── analyzer.py                 # 主入口
+│   ├── cache.py                    # SQLite 缓存层
 │   ├── config.py                   # 配置（股票/时段）
-│   ├── data_fetcher.py             # akshare 拉数据
+│   ├── data_fetcher.py             # akshare 拉数据（带 cache 兜底）
 │   ├── indicators.py               # akquant 技术指标
 │   └── report_generator.py         # 报告生成
 ├── reports/                        # 历史报告 (Markdown + JSON)
+├── data_cache.sqlite               # 运行时缓存 (gitignore, 通过 actions/cache 跨 run 复用)
 ├── requirements.txt
 └── README.md
 ```
@@ -86,6 +88,22 @@ workflow 已在 `.github/workflows/analyze.yml` 配置好 5 个 cron：
 4. **基本面** — 财务摘要 + 同比
 5. **资金面** — 主力/北向/融资
 6. **综合研判** — 时段定制的简短结论
+
+---
+
+## 🗃️ 数据缓存
+
+为避免 akshare/东财接口被反爬封锁，4 类可缓存数据走 SQLite 缓存层 (`src/cache.py`)，跨 GitHub Actions run 通过 `actions/cache@v4` 持久化：
+
+| 数据 | TTL | 说明 |
+|---|---|---|
+| 历史 K 线 | 6 小时 | 每天变动极少，1 天抓 1-2 次足够 |
+| 板块指数（煤炭/上证） | 30 分钟 | 盘中变化快，但 5 个时段内可复用 |
+| 个股基本信息 | 1 周 | 上市日期/总股本等基本不变 |
+| 资金流 | 6 小时 | 收盘后基本不变 |
+
+**实时行情不缓存**（每个时段必须拉取最新值）。  
+**财务数据**由于 akshare 接口在容器里基本都连不上，目前全部 fallback 到 N/A 跳过；等找到稳定源再接 cache。
 
 ---
 

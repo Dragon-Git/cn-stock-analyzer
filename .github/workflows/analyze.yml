@@ -57,6 +57,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Cache data fetcher results
+        uses: actions/cache@v4
+        with:
+          path: data_cache.sqlite
+          # 同一分支下所有 run 共享 cache (数据库文件, 后面会覆盖前面)
+          key: shenhua-data-cache-${{ github.ref_name }}
+          restore-keys: |
+            shenhua-data-cache-
+
       - name: Run analysis
         env:
           PYTHONUNBUFFERED: "1"
@@ -78,6 +87,11 @@ jobs:
           echo "分析时段: $SLOT"
           python -m src.analyzer --slot "$SLOT"
 
+      - name: Show cache stats
+        if: always()
+        run: |
+          python -c "from src import cache; print(cache.cache_stats())" 2>/dev/null || echo "cache not available"
+
       - name: Show latest report
         if: always()
         run: |
@@ -89,8 +103,10 @@ jobs:
       - name: Commit reports
         if: always()
         run: |
+          # 使用 GitHub 官方 ID-based noreply 格式 (41898282 是 github-actions[bot] 的固定 ID)
+          # 避免 short login 形式的 noreply 邮箱被误指其他用户
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add reports/ || true
           if git diff --cached --quiet; then
             echo "No changes to commit"
@@ -99,3 +115,11 @@ jobs:
             git commit -m "chore(reports): update ${SLOT} report $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             git push
           fi
+
+      - name: Save data cache for next run
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data_cache.sqlite
+          key: shenhua-data-cache-${{ github.ref_name }}
+
