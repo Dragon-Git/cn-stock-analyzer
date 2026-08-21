@@ -63,9 +63,16 @@ workflow 已在 `.github/workflows/analyze.yml` 配置好 5 个 cron：
 | **总耗时** | **~24s** |
 
 腾讯直连作为首选数据源（单 symbol 而非全市场 5000+ 股票），避开了 akshare `stock_zh_a_spot_em` 在 GH Action 上 ~90s 的全市场拉取。
-| 午间 | `35 3 * * 1-5` | 11:35 |
-| 收盘后 | `10 7 * * 1-5` | 15:10 |
-| 盘后深度 | `35 7 * * 1-5` | 15:35 |
+
+### 依赖管理
+
+- **Python 3.13** LTS（避免 3.14 太新生态未稳）
+- **Dependabot** 自动监控依赖和 GitHub Actions 版本（配置：`.github/dependabot.yml`）
+  - 每周一 04:00 (Asia/Shanghai) 检查 pip + github-actions 升级
+  - 依赖按组分组（pandas+numpy / http / akshare），减少 PR 数量
+  - Security alerts + auto security fixes 已开启，有 CVE 自动修
+
+---
 
 > ⚠️ 当前为简化实现，未做 A 股节假日判断。所有 cron 都会触发，由脚本内抓取失败 / 当日无数据时优雅降级。如需精准判断交易日，可用 [chinaholiday](https://pypi.org/project/chinaholiday/) 之类包做前置检查。
 
