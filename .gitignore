@@ -6,10 +6,13 @@ __pycache__/
 venv/
 .env
 
-# Reports (commit only latest, keep history via commits)
-reports/*.json
-reports/*.csv
+# Reports — 不再提交到 git, 报告改推送到 IMA 笔记
+# (GitHub Action 的 "Upload reports to IMA notes" step 会读取 reports/latest_*.md
+# 并通过 scripts/ima_upload.py 调用 import_doc 接口)
+# 本地保留 reports/ 方便调试, 但不进入版本控制
+reports/
 !reports/.gitkeep
+
 *.log
 .DS_Store
 

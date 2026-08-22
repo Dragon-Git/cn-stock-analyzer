@@ -1,130 +1,111 @@
-name: Shenhua Analysis
+name: Analyze & upload reports to IMA
 
 on:
-  # 5 个时段，周一到周五（A股交易日近似处理：法定节假日用 cron 也会触发，由脚本内日期判断或运行结果决定）
   schedule:
-    # 盘前 (北京时间 08:00 = UTC 00:00)
-    - cron: "0 0 * * 1-5"
-    # 竞价结束 (北京时间 09:35 = UTC 01:35)
-    - cron: "35 1 * * 1-5"
-    # 午间 (北京时间 11:35 = UTC 03:35)
-    - cron: "35 3 * * 1-5"
-    # 收盘后 (北京时间 15:10 = UTC 07:10)
-    - cron: "10 7 * * 1-5"
-    # 盘后深度 (北京时间 15:35 = UTC 07:35)
-    - cron: "35 7 * * 1-5"
-  # 支持手动触发，可选时段
+    # 周一到周五, 5 个时段 (对齐 src/config.py::TIME_SLOTS)
+    # cron 是 UTC; 北京时间 = UTC+8
+    - cron: '0 0 * * 1-5'        # 08:00 北京 — pre_market
+    - cron: '35 1 * * 1-5'       # 09:35 北京 — post_auction
+    - cron: '35 3 * * 1-5'       # 11:35 北京 — noon
+    - cron: '10 7 * * 1-5'       # 15:10 北京 — post_close
+    - cron: '35 7 * * 1-5'       # 15:35 北京 — evening
   workflow_dispatch:
     inputs:
       slot:
-        description: "分析时段"
-        required: true
-        type: choice
-        options:
-          - pre_market
-          - post_auction
-          - noon
-          - post_close
-          - evening
-          - all
-        default: post_close
+        description: 'Slot to run (e.g. post_close, all)'
+        required: false
+        default: 'all'
 
 concurrency:
-  group: shenhua-analyze
+  group: analyze-${{ github.event.schedule }}
   cancel-in-progress: false
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: write  # 提交报告到仓库
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install uv
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
-          version: "0.12.5"
-          enable-cache: true   # 自动缓存 ~/.cache/uv 跨 run
-          cache-dependency-glob: "requirements.txt"
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.13"   # 3.13 LTS, 平衡稳定性和性能 (3.14 太新生态未稳)
+          version: '0.12.5'
+          python-version: '3.13'
+          enable-cache: true
+          cache-dependency-glob: 'requirements.txt'
 
       - name: Install dependencies
-        run: |
-          # uv 比 pip 快 10-100x (Rust 实现), 利用 enable-cache 跨 run 复用 wheel
-          uv pip install --system -r requirements.txt
+        run: uv pip install --system -r requirements.txt
 
-      - name: Cache data fetcher results
-        uses: actions/cache@v6
-        with:
-          path: data_cache.sqlite
-          # 同一分支下所有 run 共享 cache (数据库文件, 后面会覆盖前面)
-          key: shenhua-data-cache-${{ github.ref_name }}
-          restore-keys: |
-            shenhua-data-cache-
-
-      - name: Run analysis
+      - name: Determine slot
+        id: slot
         env:
-          PYTHONUNBUFFERED: "1"
-          TZ: Asia/Shanghai
+          GH_EVENT: ${{ github.event_name }}
+          GH_SCHEDULE: ${{ github.event.schedule }}
+          GH_INPUT_SLOT: ${{ inputs.slot }}
         run: |
-          SLOT="${{ github.event.inputs.slot || 'post_close' }}"
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            # 自动 cron 触发时，根据 UTC 时间推算当前时段
-            HOUR=$(date -u +%H)
-            MIN=$(date -u +%M)
-            HM=$(printf "%02d%02d" $HOUR $MIN)
-            if   [ "$HM" -ge "0000" ] && [ "$HM" -lt "0135" ]; then SLOT="pre_market"
-            elif [ "$HM" -ge "0135" ] && [ "$HM" -lt "0335" ]; then SLOT="post_auction"
-            elif [ "$HM" -ge "0335" ] && [ "$HM" -lt "0710" ]; then SLOT="noon"
-            elif [ "$HM" -ge "0710" ] && [ "$HM" -lt "0735" ]; then SLOT="post_close"
-            else SLOT="evening"
-            fi
-          fi
-          echo "分析时段: $SLOT"
-          python -m src.analyzer --slot "$SLOT"
+          python3 - <<'PY'
+          import os, json
+          CRON_MAP = {
+              "0 0 * * 1-5":  "pre_market",
+              "35 1 * * 1-5": "post_auction",
+              "35 3 * * 1-5": "noon",
+              "10 7 * * 1-5": "post_close",
+              "35 7 * * 1-5": "evening",
+          }
+          if os.environ["GH_EVENT"] == "workflow_dispatch":
+              slot = os.environ.get("GH_INPUT_SLOT", "all") or "all"
+          else:
+              slot = CRON_MAP.get(os.environ["GH_SCHEDULE"], "all")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"slot={slot}\n")
+          print(f"Running slot: {slot}")
+          PY
 
-      - name: Show cache stats
+      - name: Run analyzer
+        run: |
+          python -m src.analyzer --slot "${{ steps.slot.outputs.slot }}"
+
+      - name: List generated reports
         if: always()
         run: |
-          python -c "from src import cache; print(cache.cache_stats())" 2>/dev/null || echo "cache not available"
-
-      - name: Show latest report
-        if: always()
-        run: |
-          ls -la reports/
+          echo "=== reports/ ==="
+          ls -la reports/ || true
+          echo "=== latest_*.md ==="
           for f in reports/latest_*.md; do
-            [ -f "$f" ] && echo "===== $f =====" && head -80 "$f" && echo
+            [ -f "$f" ] || continue
+            echo "--- $f ($(wc -c < "$f") bytes) ---"
+            head -3 "$f"
           done
 
-      - name: Commit reports
+      - name: Upload reports to IMA notes
         if: always()
+        env:
+          IMA_CLIENT_ID: ${{ secrets.IMA_CLIENT_ID }}
+          IMA_API_KEY: ${{ secrets.IMA_API_KEY }}
         run: |
-          # 使用 GitHub 官方 ID-based noreply 格式 (41898282 是 github-actions[bot] 的固定 ID)
-          # 避免 short login 形式的 noreply 邮箱被误指其他用户
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add reports/ || true
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            SLOT="${{ github.event.inputs.slot || 'auto' }}"
-            git commit -m "chore(reports): update ${SLOT} report $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            git push
-          fi
+          set -e
+          SLOT="${{ steps.slot.outputs.slot }}"
+          DATE=$(date -u +%Y-%m-%d)
+          TS=$(date -u +%H%M%S)
+          # 每轮每个 slot 的 latest_{slot}.md 作为一篇新笔记推送到 IMA
+          for f in reports/latest_*.md; do
+            [ -f "$f" ] || continue
+            # 从文件名提取 slot: latest_post_close.md → post_close
+            SLOT_FROM_FILE=$(basename "$f" .md | sed 's/^latest_//')
+            # 优先用 action 的 slot, 但每个 latest_*.md 也各自上传 (--slot all 会跑 5 轮)
+            TITLE="cn-stock-analyzer ${SLOT_FROM_FILE} ${DATE} ${TS}"
+            echo ">>> Uploading $f → $TITLE"
+            python3 scripts/ima_upload.py "$f" --title "$TITLE"
+          done
 
-      - name: Save data cache for next run
+      - name: Upload report artifacts
         if: always()
-        uses: actions/cache/save@v6
+        uses: actions/upload-artifact@v4
         with:
-          path: data_cache.sqlite
-          key: shenhua-data-cache-${{ github.ref_name }}
+          name: reports-${{ steps.slot.outputs.slot }}-${{ github.run_id }}
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 14

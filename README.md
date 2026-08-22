@@ -18,7 +18,7 @@
   趋势（MA/EMA/MACD）、震荡（RSI/KDJ/布林/CCI/WR）、波动（ATR/ADX）、量能（OBV/MFI）、动量（ROC/MOM/TRIX/BIAS）
 - **基本面**：滚动 PE/PB/PS、ROE、毛利率、净利率、营收/净利同比、资产负债率
 - **资金面**：主力/超大单/大单/中单/小单净流入、北向资金（估算）、融资余额
-- 报告自动 commit 到 `reports/`，可通过 README 入口跳转
+- 报告自动推送到 IMA 笔记（每轮每个 slot 一篇），可在 IMA 客户端搜索 `cn-stock-analyzer` 查看历史
 - **6 只股票合并一份报告**：`reports/latest_{slot}.md` 用 `## 📊 {name}` 分隔
 - **监控池**：中国神华 / 长江电力 / 北方华创 / 中国银行 / 中远海能 / 长电科技
 
@@ -50,18 +50,43 @@ workflow 已在 `.github/workflows/analyze.yml` 配置好 5 个 cron：
 |---|---|---|
 | 盘前 | `0 0 * * 1-5` | 08:00 |
 | 竞价结束 | `35 1 * * 1-5` | 09:35 |
+| 午间 | `35 3 * * 1-5` | 11:35 |
+| 收盘后 | `10 7 * * 1-5` | 15:10 |
+| 盘后深度 | `35 7 * * 1-5` | 15:35 |
 
-依赖安装用 [uv](https://github.com/astral-sh/uv) 而非 pip（Rust 实现，10-100x 加速），并通过 `enable-cache: true` 跨 run 缓存 wheel。
+#### 配置 IMA 笔记推送（必做，否则 step 失败）
+
+报告通过 [腾讯 IMA 开放 API](https://ima.qq.com) 推送到你的 IMA 笔记，不写入 git 仓库。
+在 **GitHub 仓库 → Settings → Secrets and variables → Actions** 新增两个 secret：
+
+| Secret 名称 | 值 |
+|---|---|
+| `IMA_CLIENT_ID` | IMA 控制台拿到的 client id |
+| `IMA_API_KEY`  | IMA 控制台拿到的 api key |
+
+> 这两个值**只存在 GitHub secret**里，不入代码、也不入 commit。
+> Action 通过 `secrets.IMA_CLIENT_ID` / `secrets.IMA_API_KEY` 注入到 `scripts/ima_upload.py` 的环境变量里。
+
+推送逻辑：每个 `reports/latest_{slot}.md` 作为一篇新笔记，标题形如 `cn-stock-analyzer post_close 2026-08-22 15:10`。`--slot all` 跑 5 轮会推 5 篇。
+
+如果只想本地测试，可设置环境变量后手动运行：
+
+```bash
+export IMA_CLIENT_ID=xxx
+export IMA_API_KEY=yyy
+python3 scripts/ima_upload.py reports/latest_post_close.md
+```
 
 ### 性能数据（典型 run）
 
 | 阶段 | 耗时 |
 |---|---|
 | Runner 启动 + checkout | ~10s |
-| uv 装依赖（命中 cache）| ~1s |
+| pip 装依赖（命中 cache）| ~3s |
 | akshare/akquant 启动 | ~1s |
 | 拉数据（cache 全命中 + 腾讯直连实时）| ~2s |
-| 报告生成 + commit | ~10s |
+| 报告生成 | ~5s |
+| 推送到 IMA 笔记 | ~3s |
 | **总耗时** | **~24s** |
 
 腾讯直连作为首选数据源（单 symbol 而非全市场 5000+ 股票），避开了 akshare `stock_zh_a_spot_em` 在 GH Action 上 ~90s 的全市场拉取。
