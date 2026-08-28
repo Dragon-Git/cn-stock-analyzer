@@ -449,11 +449,12 @@ def _section_summary(slot_id: str, snapshot: MarketSnapshot,
     lines.append("")
     lines.append(f"### {get_slot(slot_id)['label']} 关注重点")
     lines.append("")
-    if slot_id == "pre_market":
-        lines.append("- 集合竞价将于 09:15 开始，关注竞价成交价与量能")
-        lines.append("- 关键支撑 / 压力位参考布林带和均线")
+    if slot_id == "pre_open":
+        # 09:15 集合竞价刚开始, 今日 K 线尚未生成, 看外盘 + 昨 K
+        lines.append("- 集合竞价进行中 (09:15-09:25), 9:20 后不可撤单段为真实情绪窗口")
+        lines.append("- 09:25 撮合结果将决定今日开盘缺口")
         if ma20 and price:
-            lines.append(f"- 重要参考：MA20 = {ma20:.2f}，MA60 = {ma60:.2f}")
+            lines.append(f"- 参考：MA20 = {ma20:.2f}，MA60 = {ma60:.2f}")
     elif slot_id == "post_auction":
         gap_pct = ((snapshot.open - snapshot.pre_close) / snapshot.pre_close * 100
                    if snapshot.pre_close else 0)
@@ -471,12 +472,6 @@ def _section_summary(slot_id: str, snapshot: MarketSnapshot,
         lines.append("- 全日 K 线已收定，技术形态明确")
         lines.append("- 明日开盘关注今日最高 / 最低的支撑压力作用")
         lines.append("- 收盘价相对 MA5 的位置决定短期强弱")
-    elif slot_id == "evening":
-        lines.append("- 资金面综合：主力 + 北向 + 融资余额")
-        lines.append("- 关注行业板块当日表现与神华的相对强弱")
-        lines.append("- 隔夜美股、煤炭期货对明日开盘有传导")
-        if fin.roe is not None and fin.roe > 10:
-            lines.append(f"- 基本面稳健（ROE {fin.roe:.2f}%），适合长期持有参考")
     lines.append("")
     lines.append("---")
     lines.append("")

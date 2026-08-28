@@ -2,13 +2,12 @@ name: Analyze & upload reports to IMA
 
 on:
   schedule:
-    # 周一到周五, 5 个时段 (对齐 src/config.py::TIME_SLOTS)
-    # cron 是 UTC; 北京时间 = UTC+8
-    - cron: '0 0 * * 1-5'        # 08:00 北京 — pre_market
+    # 周一到周五, 4 个时段 (北京时间; cron 是 UTC, 北京 = UTC+8)
+    # 对齐 src/config.py::TIME_SLOTS
+    - cron: '15 1 * * 1-5'       # 09:15 北京 — pre_open
     - cron: '35 1 * * 1-5'       # 09:35 北京 — post_auction
-    - cron: '35 3 * * 1-5'       # 11:35 北京 — noon
-    - cron: '10 7 * * 1-5'       # 15:10 北京 — post_close
-    - cron: '35 7 * * 1-5'       # 15:35 北京 — evening
+    - cron: '0 4 * * 1-5'        # 12:00 北京 — noon
+    - cron: '0 7 * * 1-5'        # 15:00 北京 — post_close
   workflow_dispatch:
     inputs:
       slot:
@@ -54,11 +53,10 @@ jobs:
           python3 - <<'PY'
           import os, json
           CRON_MAP = {
-              "0 0 * * 1-5":  "pre_market",
+              "15 1 * * 1-5": "pre_open",
               "35 1 * * 1-5": "post_auction",
-              "35 3 * * 1-5": "noon",
-              "10 7 * * 1-5": "post_close",
-              "35 7 * * 1-5": "evening",
+              "0 4 * * 1-5":  "noon",
+              "0 7 * * 1-5":  "post_close",
           }
           if os.environ["GH_EVENT"] == "workflow_dispatch":
               slot = os.environ.get("GH_INPUT_SLOT", "all") or "all"

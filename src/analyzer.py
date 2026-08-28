@@ -165,7 +165,7 @@ def main(argv: Optional[list] = None) -> int:
     global REPORTS_DIR
     p = argparse.ArgumentParser(description="A 股多股票智能分析")
     p.add_argument("--slot", "-s", choices=[s["id"] for s in TIME_SLOTS] + ["all"],
-                   default="post_close", help="分析时段, all 表示跑全部 5 个")
+                   default="post_close", help="分析时段, all 表示跑全部 4 个")
     p.add_argument("--list", "-l", action="store_true", help="列出所有时段和股票")
     p.add_argument("--out", "-o", default=str(REPORTS_DIR), help="报告输出目录")
     p.add_argument("--stock", help="只分析指定股票 (6 位代码), 调试用")

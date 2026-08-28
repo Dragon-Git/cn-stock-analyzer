@@ -82,37 +82,32 @@ STOCKS: List[StockConfig] = [
 SHENHUA = STOCKS[0]
 
 
-# 5 个时段定义
+# 4 个时段定义 (北京时间)
+# 9:15 集合竞价开盘 / 9:35 开盘后 5 分钟 / 12:00 午间 / 15:00 收盘
 TIME_SLOTS = [
     {
-        "id": "pre_market",         # 盘前
+        "id": "pre_open",          # 集合竞价盘前
         "label": "盘前",
-        "cron_utc": "0 0 * * 1-5",  # 08:00 北京
-        "focus": "全球指数 + 商品 + 公告 + 期指",
+        "cron_utc": "15 1 * * 1-5",  # 09:15 北京
+        "focus": "集合竞价 + 外盘 + 昨 K 趋势",
     },
     {
-        "id": "post_auction",       # 集合竞价后
-        "label": "竞价后",
+        "id": "post_auction",      # 集合竞价后 / 开盘 5 分钟
+        "label": "开盘",
         "cron_utc": "35 1 * * 1-5",  # 09:35 北京
         "focus": "开盘价 + 集合竞价强度 + 板块异动",
     },
     {
-        "id": "noon",               # 午间
+        "id": "noon",              # 午间
         "label": "午间",
-        "cron_utc": "35 3 * * 1-5",  # 11:35 北京
+        "cron_utc": "0 4 * * 1-5",   # 12:00 北京
         "focus": "上午量价 + 板块轮动 + 北向",
     },
     {
-        "id": "post_close",         # 收盘后
+        "id": "post_close",        # 收盘
         "label": "收盘",
-        "cron_utc": "10 7 * * 1-5",  # 15:10 北京
+        "cron_utc": "0 7 * * 1-5",   # 15:00 北京
         "focus": "全天 K 线 + 技术指标 + 量价总结",
-    },
-    {
-        "id": "evening",            # 盘后深度
-        "label": "盘后",
-        "cron_utc": "35 7 * * 1-5",  # 15:35 北京
-        "focus": "深度财务 + 资金流 + 明日展望",
     },
 ]
 
