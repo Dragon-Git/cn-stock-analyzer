@@ -396,8 +396,11 @@ def _section_summary(slot_id: str, snapshot: MarketSnapshot,
                      indicators: Dict[str, Dict[str, Optional[float]]],
                      fin: FinancialSnapshot,
                      flow: FundFlowSnapshot) -> str:
-    """每时段不同的简短结论"""
-    lines = ["## 七、综合研判", ""]
+    """每时段不同的简短结论, slot 关注重点由 minijinja 模板渲染"""
+    import minijinja  # 局部 import, 避免顶层 import 拖慢非此函数调用
+
+    from .config import get_slot
+
     price = snapshot.price
     trend = indicators.get("trend", {})
     osc = indicators.get("oscillator", {})
@@ -408,76 +411,62 @@ def _section_summary(slot_id: str, snapshot: MarketSnapshot,
     macd_h = trend.get("MACD")
     adx = indicators.get("volatility", {}).get("ADX14")
 
-    # 共用结论片段
+    # ===== 业务判断: Python 端算, 模板端只渲染 =====
     trend_word = judge_trend(trend, price)
-    lines.append(f"- **趋势**: {trend_word}（当前价 ¥{price:.2f}）")
-
-    if rsi12 is not None:
-        lines.append(f"- **RSI12** = {rsi12:.1f}，{judge_rsi(osc)}")
-    if kdj_j is not None:
-        lines.append(f"- **KDJ-J** = {kdj_j:.1f}，{judge_kdj(osc)}")
-    if macd_h is not None:
-        lines.append(f"- **MACD 柱** = {macd_h:.4f}，{judge_macd(trend)}")
-    if adx is not None:
-        if adx > 25:
-            lines.append(f"- **ADX14** = {adx:.1f}，趋势性较强")
-        elif adx < 20:
-            lines.append(f"- **ADX14** = {adx:.1f}，盘整格局")
-        else:
-            lines.append(f"- **ADX14** = {adx:.1f}，趋势中等")
+    rsi_judgment = judge_rsi(osc) if rsi12 is not None else None
+    kdj_judgment = judge_kdj(osc) if kdj_j is not None else None
+    macd_judgment = judge_macd(trend) if macd_h is not None else None
+    adx_judgment = (
+        "趋势性较强" if adx is not None and adx > 25
+        else "盘整格局" if adx is not None and adx < 20
+        else "趋势中等" if adx is not None
+        else None
+    )
 
     main_in = flow.main_net_inflow
-    if main_in is not None:
-        direction = "流入" if main_in > 0 else "流出"
-        amount_wan = main_in / 1e4
-        lines.append(f"- **主力资金** {direction} {amount_wan:,.0f} 万元")
-    elif flow.main_net_inflow is None and all(
+    main_net_inflow_wan = main_in / 1e4 if main_in is not None else None
+    main_inflow_direction = (
+        "流入" if main_in is not None and main_in > 0
+        else "流出" if main_in is not None
+        else None
+    )
+    # 资金数据整体缺失: 4 个字段全 None
+    fund_data_missing = all(
         v is None for v in (flow.super_net_inflow, flow.big_net_inflow,
                             flow.north_net_inflow, flow.margin_balance)
-    ):
-        # 资金数据整体缺失，加个提示
-        lines.append("- ℹ️ 资金流数据源 (东方财富) 暂不可用，跳过资金面分析")
+    )
 
-    if fin.roe is not None:
-        lines.append(f"- **ROE** = {fin.roe:.2f}% (报告期 {fin.report_date})")
-    elif fin.industry:
-        lines.append(f"- 行业: {fin.industry}")
-    else:
-        lines.append("- ℹ️ 基本面数据源 (东方财富/同花顺) 暂不可用，跳过基本面分析")
+    # ===== 模板渲染 =====
+    template_path = Path(__file__).parent / "templates" / "slot_focus.md.j2"
+    template_str = template_path.read_text(encoding="utf-8")
 
-    # 时段特定结论
-    lines.append("")
-    lines.append(f"### {get_slot(slot_id)['label']} 关注重点")
-    lines.append("")
-    if slot_id == "pre_open":
-        # 09:15 集合竞价刚开始, 今日 K 线尚未生成, 看外盘 + 昨 K
-        lines.append("- 集合竞价进行中 (09:15-09:25), 9:20 后不可撤单段为真实情绪窗口")
-        lines.append("- 09:25 撮合结果将决定今日开盘缺口")
-        if ma20 and price:
-            lines.append(f"- 参考：MA20 = {ma20:.2f}，MA60 = {ma60:.2f}")
-    elif slot_id == "post_auction":
-        gap_pct = ((snapshot.open - snapshot.pre_close) / snapshot.pre_close * 100
-                   if snapshot.pre_close else 0)
-        lines.append(f"- **开盘缺口**: {gap_pct:+.2f}%")
-        lines.append("- 集合竞价结果对早盘情绪有指导意义")
-        lines.append("- 关注 09:30-09:45 第一根 15 分钟 K 线的方向")
-    elif slot_id == "noon":
-        lines.append("- 上午已走完，关注午后是否突破上午高点 / 跌破上午低点")
-        if rsi12 is not None and rsi12 > 70:
-            lines.append("- ⚠️ RSI 偏超买，午后谨防回吐")
-        if rsi12 is not None and rsi12 < 30:
-            lines.append("- 💡 RSI 偏超卖，午后留意技术性反弹")
-        lines.append("- 13:00 开盘量能是关键")
-    elif slot_id == "post_close":
-        lines.append("- 全日 K 线已收定，技术形态明确")
-        lines.append("- 明日开盘关注今日最高 / 最低的支撑压力作用")
-        lines.append("- 收盘价相对 MA5 的位置决定短期强弱")
-    lines.append("")
-    lines.append("---")
-    lines.append("")
-    lines.append("> ⚠️ **免责声明**: 本报告由量化系统自动生成，仅供研究参考，")
-    lines.append("> 不构成任何投资建议。投资有风险，决策需谨慎。")
-    return "\n".join(lines)
+    env = minijinja.Environment()
+    env.add_filter("fmt2", lambda x: "N/A" if x is None else f"{x:.2f}")
+    env.add_filter("fmt1", lambda x: "N/A" if x is None else f"{x:.1f}")
+    env.add_filter("fmt4", lambda x: "N/A" if x is None else f"{x:.4f}")
+    env.add_filter("fmt0", lambda x: "N/A" if x is None else f"{x:,.0f}")
+    env.add_filter("fmtpct", lambda x: "N/A" if x is None else f"{x:+.2f}%")
+
+    return env.render_str(
+        template_str,
+        slot_id=slot_id,
+        slot_meta=get_slot(slot_id),
+        price=price,
+        trend_word=trend_word,
+        rsi12=rsi12, rsi_judgment=rsi_judgment,
+        kdj_j=kdj_j, kdj_judgment=kdj_judgment,
+        macd_h=macd_h, macd_judgment=macd_judgment,
+        adx=adx, adx_judgment=adx_judgment,
+        main_net_inflow=main_in,
+        main_net_inflow_wan=main_net_inflow_wan,
+        main_inflow_direction=main_inflow_direction,
+        fund_data_missing=fund_data_missing,
+        roe=fin.roe, report_date=fin.report_date, industry=fin.industry,
+        ma20=ma20, ma60=ma60,
+        gap_pct=((snapshot.open - snapshot.pre_close) / snapshot.pre_close * 100
+                 if snapshot.pre_close and snapshot.open is not None
+                 else None),
+    )
 
 
 # ===== 主入口 =====

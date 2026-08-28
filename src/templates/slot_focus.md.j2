@@ -1,0 +1,60 @@
+{% set slot_label = slot_meta.label %}
+## 七、综合研判
+
+- **趋势**: {{ trend_word }}（当前价 ¥{{ price | fmt2 }}）
+{% if rsi12 is not none -%}
+- **RSI12** = {{ rsi12 | fmt1 }}，{{ rsi_judgment }}
+{% endif -%}
+{% if kdj_j is not none -%}
+- **KDJ-J** = {{ kdj_j | fmt1 }}，{{ kdj_judgment }}
+{% endif -%}
+{% if macd_h is not none -%}
+- **MACD 柱** = {{ macd_h | fmt4 }}，{{ macd_judgment }}
+{% endif -%}
+{% if adx is not none -%}
+- **ADX14** = {{ adx | fmt1 }}，{{ adx_judgment }}
+{% endif -%}
+{% if main_net_inflow is not none -%}
+- **主力资金** {{ main_inflow_direction }} {{ main_net_inflow_wan | fmt0 }} 万元
+{% elif fund_data_missing -%}
+- ℹ️ 资金流数据源 (东方财富) 暂不可用，跳过资金面分析
+{% endif -%}
+{% if roe is not none -%}
+- **ROE** = {{ roe | fmt2 }}% (报告期 {{ report_date }})
+{% elif industry -%}
+- 行业: {{ industry }}
+{% else -%}
+- ℹ️ 基本面数据源 (东方财富/同花顺) 暂不可用，跳过基本面分析
+{% endif -%}
+
+### {{ slot_label }} 关注重点
+
+{% if slot_id == "pre_open" -%}
+- 集合竞价进行中 (09:15-09:25), 9:20 后不可撤单段为真实情绪窗口
+- 09:25 撮合结果将决定今日开盘缺口
+{% if ma20 is not none and price is not none -%}
+- 参考：MA20 = {{ ma20 | fmt2 }}，MA60 = {{ ma60 | fmt2 }}
+{% endif -%}
+{% elif slot_id == "post_auction" -%}
+- **开盘缺口**: {{ gap_pct | fmtpct }}
+- 集合竞价结果对早盘情绪有指导意义
+- 关注 09:30-09:45 第一根 15 分钟 K 线的方向
+{% elif slot_id == "noon" -%}
+- 上午已走完，关注午后是否突破上午高点 / 跌破上午低点
+{% if rsi12 is not none and rsi12 > 70 -%}
+- ⚠️ RSI 偏超买，午后谨防回吐
+{% endif -%}
+{% if rsi12 is not none and rsi12 < 30 -%}
+- 💡 RSI 偏超卖，午后留意技术性反弹
+{% endif -%}
+- 13:00 开盘量能是关键
+{% elif slot_id == "post_close" -%}
+- 全日 K 线已收定，技术形态明确
+- 明日开盘关注今日最高 / 最低的支撑压力作用
+- 收盘价相对 MA5 的位置决定短期强弱
+{% endif %}
+
+---
+
+> ⚠️ **免责声明**: 本报告由量化系统自动生成，仅供研究参考，
+> 不构成任何投资建议。投资有风险，决策需谨慎。
