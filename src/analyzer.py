@@ -22,7 +22,7 @@ from . import data_fetcher as df_mod
 from . import indicators as ind_mod
 from . import report_generator as rg
 from . import trading_calendar as tc
-from .config import STOCKS, StockConfig, TIME_SLOTS, get_slot
+from .config import STOCKS, StockConfig, TIME_SLOTS, get_slot, now_beijing
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,14 +49,14 @@ def analyze_one_stock(stock: StockConfig, slot_id: str) -> None:
     if kline.empty:
         logger.warning("[%s] K 线空, 生成 placeholder 报告", stock.symbol)
         snap = df_mod.MarketSnapshot()
-        snap.as_of = datetime.now().isoformat(timespec="seconds")
+        snap.as_of = now_beijing().isoformat(timespec="seconds")
         fin = df_mod.FinancialSnapshot()
         flow = df_mod.FundFlowSnapshot()
         panel = {"sector_name": "N/A", "sector_change_pct": 0.0,
                  "sh_index_change_pct": 0.0}
         report_md = (
             f"# {stock.name}（{stock.symbol}）— {get_slot(slot_id)['label']}分析报告\n\n"
-            f"> **报告时点**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  \n"
+            f"> **报告时点**: {now_beijing().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  \n"
             f"> **时段**: {get_slot(slot_id)['label']}\n\n"
             f"## ⚠️ 数据获取失败\n\n"
             f"本时段未能拉取 {stock.name} 的历史 K 线。\n"

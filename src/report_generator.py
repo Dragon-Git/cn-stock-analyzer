@@ -13,6 +13,8 @@ import threading
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+
+from .config import now_beijing
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -159,7 +161,7 @@ def _header(slot_id: str, snapshot: MarketSnapshot, stock_name: str, stock_symbo
     lines = [
         f"# {stock_name}（{stock_symbol}）— {slot['label']}分析报告",
         "",
-        f"> **报告时点**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  ",
+        f"> **报告时点**: {now_beijing().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  ",
         f"> **时段侧重**: {slot['focus']}  ",
         f"> **当前价**: ¥{snapshot.price:.2f}  |  涨跌 {_sign_arrow(snapshot.change)} {_pct(snapshot.change_pct)}  |  昨收 ¥{snapshot.pre_close:.2f}",
         "",
@@ -510,8 +512,8 @@ def save_report(report_md: str, slot_id: str,
     - latest_{slot}.md 单文件包含全部股票, 用 ## 📊 标题分隔
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    today = datetime.now().strftime("%Y%m%d")
-    ts = datetime.now().strftime("%H%M%S")
+    today = now_beijing().strftime("%Y%m%d")
+    ts = now_beijing().strftime("%H%M%S")
 
     # 单只股票的时间戳文件 (供回溯)
     md_path = out_dir / f"{today}_{slot_id}_{stock.symbol}_{ts}.md"
@@ -520,7 +522,7 @@ def save_report(report_md: str, slot_id: str,
     # 原始数据 JSON
     raw = {
         "slot": slot_id,
-        "as_of": datetime.now().isoformat(timespec="seconds"),
+        "as_of": now_beijing().isoformat(timespec="seconds"),
         "stock": {"symbol": stock.symbol, "name": stock.name},
         "snapshot": asdict(snapshot),
         "kline": (kline.tail(60).assign(date=kline["date"].dt.strftime("%Y-%m-%d"))
@@ -586,7 +588,7 @@ def _write_latest_md(out_dir: Path, slot_id: str,
                 # 多股票 header (首次创建)
                 header = (
                     f"# 多股票 {slot_id} 时段报告\n\n"
-                    f"> **报告时点**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  \n"
+                    f"> **报告时点**: {now_beijing().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  \n"
                     f"> **股票池**: {' / '.join(f'{s.name}({s.symbol})' for s in STOCKS)}  \n\n"
                     "---\n\n"
                 )
@@ -617,7 +619,7 @@ def _write_latest_md(out_dir: Path, slot_id: str,
         else:
             header = (
                 f"# 多股票 {slot_id} 时段报告\n\n"
-                f"> **报告时点**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  \n"
+                f"> **报告时点**: {now_beijing().strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)  \n"
                 f"> **股票池**: {' / '.join(f'{s.name}({s.symbol})' for s in STOCKS)}  \n\n"
                 "---\n\n"
             )

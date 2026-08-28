@@ -6,7 +6,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
 from typing import List
+
+# 中国 A 股时区 (UTC+8, 不含夏令时)
+BEIJING_TZ = timezone(timedelta(hours=8), name="Asia/Shanghai")
+
+
+def now_beijing() -> datetime:
+    """返回当前 Asia/Shanghai 时区的 datetime (带 tzinfo)"""
+    return datetime.now(BEIJING_TZ)
 
 
 @dataclass
