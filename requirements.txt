@@ -12,4 +12,4 @@ requests>=2.34.2,<3
 curl_cffi>=0.16.0,<1
 
 # 报告模板
-minijinja>=2.0,<3      # Rust 实现的 jinja2 子集, 用于渲染 slot 关注重点
+minijinja>=2.22.0,<3      # Rust 实现的 jinja2 子集, 用于渲染 slot 关注重点
